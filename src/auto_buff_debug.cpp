@@ -1,4 +1,4 @@
-﻿#include <fmt/format.h>
+#include <fmt/format.h>
 
 #include <string>
 
@@ -17,14 +17,12 @@
 #include "tools/recorder.hpp"
 #include "tools/trajectory.hpp"
 
-// 定义命令行参数
 const std::string keys =
   "{help h usage ? | | 输出命令行参数说明}"
   "{@config-path   | | yaml配置文件路径 }";
 
 int main(int argc, char * argv[])
 {
-  // 读取命令行参数
   cv::CommandLineParser cli(argc, argv, keys);
   auto config_path = cli.get<std::string>(0);
   if (cli.has("help") || config_path.empty()) {
@@ -32,20 +30,16 @@ int main(int argc, char * argv[])
     return 0;
   }
 
-  // 初始化绘图器、录制器、退出器
   tools::Plotter plotter;
   tools::Recorder recorder;
   tools::Exiter exiter;
 
-  // 初始化C板、相机
   io::CBoard cboard(config_path);
   io::Camera camera(config_path);
 
-  // 初始化识别器、解算器、追踪器、瞄准器
   auto_buff::Buff_Detector detector(config_path);
   auto_buff::Solver solver(config_path);
   auto_buff::SmallTarget target;
-  // auto_buff::BigTarget target;
   auto_buff::Aimer aimer(config_path);
 
   cv::Mat img;
@@ -54,30 +48,19 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    q = cboard.imu_at(t);
-    // recorder.record(img, q, t);
-
-    // -------------- 打符核心逻辑 --------------
+    q = cboard.imu_at_image(t);
 
     solver.set_R_gimbal2world(q);
 
     auto power_runes = detector.detect(img);
-
     solver.solve(power_runes);
-
     target.get_target(power_runes, t);
 
     auto target_copy = target;
-
     auto command = aimer.aim(target_copy, t, cboard.bullet_speed, true);
-
     cboard.send(command);
 
-    // -------------- 调试输出 --------------
-
     nlohmann::json data;
-
-    // buff原始观测数据
     if (power_runes.has_value()) {
       const auto & p = power_runes.value();
       data["buff_R_yaw"] = p.ypd_in_world[0];
@@ -90,13 +73,10 @@ int main(int argc, char * argv[])
 
     if (!target.is_unsolve()) {
       auto & p = power_runes.value();
-
-      // 显示
       for (int i = 0; i < 4; i++) tools::draw_point(img, p.target().points[i]);
       tools::draw_point(img, p.target().center, {0, 0, 255}, 3);
       tools::draw_point(img, p.r_center, {0, 0, 255}, 3);
 
-      // 当前帧target更新后buff
       auto Rxyz_in_world_now = target.point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.0));
       auto image_points =
         solver.reproject_buff(Rxyz_in_world_now, target.ekf_x()[4], target.ekf_x()[5]);
@@ -105,8 +85,6 @@ int main(int argc, char * argv[])
       tools::draw_points(
         img, std::vector<cv::Point2f>(image_points.begin() + 4, image_points.end()), {0, 255, 0});
 
-      // buff瞄准位置(预测)
-      double dangle = target.ekf_x()[5] - target_copy.ekf_x()[5];
       auto Rxyz_in_world_pre = target.point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.0));
       image_points =
         solver.reproject_buff(Rxyz_in_world_pre, target_copy.ekf_x()[4], target_copy.ekf_x()[5]);
@@ -115,14 +93,12 @@ int main(int argc, char * argv[])
       tools::draw_points(
         img, std::vector<cv::Point2f>(image_points.begin() + 4, image_points.end()), {255, 0, 0});
 
-      // 观测器内部数据
       Eigen::VectorXd x = target.ekf_x();
       data["R_yaw"] = x[0];
       data["R_V_yaw"] = x[1];
       data["R_pitch"] = x[2];
       data["R_dis"] = x[3];
       data["yaw"] = x[4] * 57.3;
-
       data["angle"] = x[5] * 57.3;
       data["spd"] = x[6] * 57.3;
       if (x.size() >= 10) {
@@ -134,7 +110,6 @@ int main(int argc, char * argv[])
       }
     }
 
-    // 云台响应情况
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_pitch"] = ypr[1] * 57.3;

@@ -85,7 +85,7 @@ int main(int argc, char * argv[])
     /// 自瞄
     if (mode.load() == io::Mode::auto_aim) {
       auto [img, armors, t] = detector.debug_pop();
-      Eigen::Quaterniond q = cboard.imu_at(t - 1ms);
+      Eigen::Quaterniond q = cboard.imu_at_image(t);
 
       // recorder.record(img, q, t);
 
@@ -106,7 +106,7 @@ int main(int argc, char * argv[])
       std::chrono::steady_clock::time_point t;
 
       camera.read(img, t);
-      q = cboard.imu_at(t - 1ms);
+      q = cboard.imu_at_image(t);
 
       // recorder.record(img, q, t);
 

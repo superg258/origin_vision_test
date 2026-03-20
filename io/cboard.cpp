@@ -1,7 +1,22 @@
 #include "cboard.hpp"
 
+#include <algorithm>
+#include <cstdint>
+
 #include "tools/math_tools.hpp"
 #include "tools/yaml.hpp"
+
+namespace
+{
+std::chrono::microseconds read_imu_query_offset(const YAML::Node & yaml)
+{
+  double offset_s = -0.001;
+  if (yaml["timing"].IsDefined() && yaml["timing"]["offset"].IsDefined()) {
+    offset_s = yaml["timing"]["offset"].as<double>();
+  }
+  return std::chrono::microseconds(static_cast<int64_t>(std::llround(offset_s * 1e6)));
+}
+}  // namespace
 
 namespace io
 {
@@ -16,32 +31,46 @@ CBoard::CBoard(const std::string & config_path)
   tools::logger()->info("[Cboard] Waiting for q...");
   queue_.pop(data_ahead_);
   queue_.pop(data_behind_);
+  data_prev_ = data_ahead_;
   tools::logger()->info("[Cboard] Opened.");
 }
 
 Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
-  if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
+  auto interpolate = [&](const IMUData & a, const IMUData & b) {
+    auto q_a = a.q.normalized();
+    auto q_b = b.q.normalized();
+    const double dt = tools::delta_time(b.timestamp, a.timestamp);
+    if (dt <= 1e-6) return q_b;
+    const double k = std::clamp(tools::delta_time(timestamp, a.timestamp) / dt, 0.0, 1.0);
+    return q_a.slerp(k, q_b).normalized();
+  };
 
-  while (true) {
-    queue_.pop(data_behind_);
-    if (data_behind_.timestamp > timestamp) break;
-    data_ahead_ = data_behind_;
+  if (timestamp <= data_ahead_.timestamp) {
+    if (has_prev_ && timestamp >= data_prev_.timestamp) {
+      return interpolate(data_prev_, data_ahead_);
+    }
+    return data_ahead_.q.normalized();
   }
 
-  Eigen::Quaterniond q_a = data_ahead_.q.normalized();
-  Eigen::Quaterniond q_b = data_behind_.q.normalized();
-  auto t_a = data_ahead_.timestamp;
-  auto t_b = data_behind_.timestamp;
-  auto t_c = timestamp;
-  std::chrono::duration<double> t_ab = t_b - t_a;
-  std::chrono::duration<double> t_ac = t_c - t_a;
+  while (data_behind_.timestamp < timestamp) {
+    has_prev_ = true;
+    data_prev_ = data_ahead_;
+    data_ahead_ = data_behind_;
+    queue_.pop(data_behind_);
+  }
 
-  // 四元数插值
-  auto k = t_ac / t_ab;
-  Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
+  return interpolate(data_ahead_, data_behind_);
+}
 
-  return q_c;
+Eigen::Quaterniond CBoard::imu_at_image(std::chrono::steady_clock::time_point image_timestamp)
+{
+  return imu_at(image_timestamp + imu_query_offset_);
+}
+
+double CBoard::offset_ms() const
+{
+  return static_cast<double>(imu_query_offset_.count()) / 1000.0;
 }
 
 void CBoard::send(Command command) const
@@ -89,7 +118,6 @@ void CBoard::callback(const can_frame & frame)
     shoot_mode = ShootMode(frame.data[3]);
     ft_angle = (int16_t)(frame.data[4] << 8 | frame.data[5]) / 1e4;
 
-    // 限制日志输出频率为1Hz
     static auto last_log_time = std::chrono::steady_clock::time_point::min();
     auto now = std::chrono::steady_clock::now();
 
@@ -102,7 +130,6 @@ void CBoard::callback(const can_frame & frame)
   }
 }
 
-// 实现方式有待改进
 std::string CBoard::read_yaml(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
@@ -110,6 +137,10 @@ std::string CBoard::read_yaml(const std::string & config_path)
   quaternion_canid_ = tools::read<int>(yaml, "quaternion_canid");
   bullet_speed_canid_ = tools::read<int>(yaml, "bullet_speed_canid");
   send_canid_ = tools::read<int>(yaml, "send_canid");
+  imu_query_offset_ = read_imu_query_offset(yaml);
+  tools::logger()->info(
+    "[CBoard] timing offset={:.2f}ms",
+    static_cast<double>(imu_query_offset_.count()) / 1000.0);
 
   if (!yaml["can_interface"]) {
     throw std::runtime_error("Missing 'can_interface' in YAML configuration.");

@@ -13,6 +13,7 @@ add_library(io STATIC
     cboard.cpp
     dm_imu/dm_imu.cpp
     gimbal/gimbal.cpp
+    ovgimbal.cpp
 )
 
 # hikrobot
@@ -38,22 +39,39 @@ endif()
 target_link_libraries(io MvCameraControl MVSDK usb-1.0 yaml-cpp serial)
 
 ################## 检查 ROS 环境 ##################
-find_package(ament_cmake QUIET)
-find_package(rclcpp QUIET)
-find_package(std_msgs QUIET)
-find_package(rosidl_typesupport_cpp QUIET)
-find_package(sp_msgs QUIET)
+find_package(fastcdr QUIET)
 
-# 如果找不到 ROS 环境，则跳过 ROS 相关的部分
-if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT rosidl_typesupport_cpp_FOUND OR NOT sp_msgs_FOUND)
-    message(WARNING "ROS2 not found, skipping ROS2 specific code.")
+if(NOT fastcdr_FOUND)
+    message(STATUS "fastcdr not found, skipping all optional ROS2 IO targets.")
 else()
-    message(STATUS "ROS2 environment found, compiling ROS2-related code.")
-    
-    # 添加 ROS2 相关的文件
-    target_sources(io PRIVATE ros2/publish2nav.cpp ros2/ros2.cpp ros2/subscribe2nav.cpp)
+    find_package(ament_cmake QUIET)
+    find_package(rclcpp QUIET)
+    find_package(std_msgs QUIET)
+    find_package(rosidl_typesupport_cpp QUIET)
+    find_package(sp_msgs QUIET)
 
-    # 设置 ROS2 依赖
-    include_directories(${std_msgs_INCLUDE_DIRS})
-    ament_target_dependencies(io rclcpp std_msgs sp_msgs)
+    if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND)
+        message(STATUS "ROS2 core environment not found, skipping optional ROS2 IO targets.")
+    else()
+        message(STATUS "ROS2 core environment found, enabling optional ROS2 IO targets.")
+
+        if(rosidl_typesupport_cpp_FOUND AND sp_msgs_FOUND)
+            add_library(io_ros2_nav STATIC
+                ros2/publish2nav.cpp
+                ros2/ros2.cpp
+                ros2/subscribe2nav.cpp
+            )
+            ament_target_dependencies(io_ros2_nav rclcpp std_msgs sp_msgs)
+            message(STATUS "Enabled io_ros2_nav target.")
+        else()
+            message(STATUS "sp_msgs or rosidl_typesupport_cpp not found, skipping io_ros2_nav target.")
+        endif()
+
+        add_library(io_ros2_gimbal STATIC
+            ros2/ros2_gimbal.cpp
+        )
+        ament_target_dependencies(io_ros2_gimbal rclcpp std_msgs)
+        target_link_libraries(io_ros2_gimbal fastcdr)
+        message(STATUS "Enabled io_ros2_gimbal target.")
+    endif()
 endif()

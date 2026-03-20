@@ -60,6 +60,10 @@ bullet_speed_canid: 0x110
 send_canid: 0xff
 can_interface: "can0"
 
+#####-----时序参数-----#####
+timing:
+  offset: -0.001 # s, 图像时间戳到姿态查询的固定补偿
+
 #####-----tracker参数-----#####
 min_detect_count: 5
 max_temp_lost_count: 15

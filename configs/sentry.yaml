@@ -57,6 +57,18 @@ bullet_speed_canid: 0x110
 send_canid: 0xff
 can_interface: "can0"
 
+#####-----时序参数-----#####
+timing:
+  offset: 0.002 # s, 图像时间戳到姿态查询的固定补偿
+
+#####-----ROS2云台桥参数-----#####
+ros2_gimbal:
+  node_name: "nav_gimbal_bridge"
+  status_topic: "/serial/gimbal_status"
+  cmd_topic: "/serial/process_gimbal"
+  status_msg_type: "rm_interfaces/msg/Gimbal"
+  cmd_msg_type: "rm_interfaces/msg/GimbalCmd"
+
 #####-----tracker参数-----#####
 min_detect_count: 5
 max_temp_lost_count: 25

@@ -66,7 +66,7 @@ int main(int argc, char * argv[])
     auto t0 = std::chrono::steady_clock::now();
     /// 自瞄核心逻辑
     auto [img, armors, t] = detector.debug_pop();
-    Eigen::Quaterniond q = cboard.imu_at(t - 1ms);
+    Eigen::Quaterniond q = cboard.imu_at_image(t);
     mode = cboard.mode;
 
     if (last_mode != mode) {

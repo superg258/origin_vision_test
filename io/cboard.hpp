@@ -45,6 +45,8 @@ public:
   CBoard(const std::string & config_path);
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
+  Eigen::Quaterniond imu_at_image(std::chrono::steady_clock::time_point image_timestamp);
+  double offset_ms() const;
 
   void send(Command command) const;
 
@@ -57,8 +59,11 @@ private:
 
   tools::ThreadSafeQueue<IMUData> queue_;  // 必须在can_之前初始化，否则存在死锁的可能
   SocketCAN can_;
+  IMUData data_prev_;
   IMUData data_ahead_;
   IMUData data_behind_;
+  bool has_prev_{false};
+  std::chrono::microseconds imu_query_offset_{-1000};
 
   int quaternion_canid_, bullet_speed_canid_, send_canid_;
 

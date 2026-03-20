@@ -56,7 +56,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    q = cboard.imu_at(t - 1ms);
+    q = cboard.imu_at_image(t);
     mode = cboard.mode;
 
     if (last_mode != mode) {

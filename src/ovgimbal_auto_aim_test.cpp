@@ -1,11 +1,12 @@
+#include <fmt/core.h>
+
 #include <chrono>
+#include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
-#include <thread>
 
 #include "io/camera.hpp"
-#include "io/dm_imu/dm_imu.hpp"
+#include "io/ovgimbal.hpp"
 #include "tasks/auto_aim/aimer.hpp"
-#include "tasks/auto_aim/detector.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -18,16 +19,14 @@
 #include "tools/recorder.hpp"
 
 const std::string keys =
-  "{help h usage ? |                  | 输出命令行参数说明}"
-  "{@config-path   | configs/uav.yaml | yaml配置文件路径 }";
-
-using namespace std::chrono_literals;
+  "{help h usage ? |                           | 输出命令行参数说明}"
+  "{@config-path   | configs/standard4.yaml   | 位置参数，yaml配置文件路径 }";
 
 int main(int argc, char * argv[])
 {
   cv::CommandLineParser cli(argc, argv, keys);
-  auto config_path = cli.get<std::string>("@config-path");
-  if (cli.has("help") || !cli.has("@config-path")) {
+  auto config_path = cli.get<std::string>(0);
+  if (cli.has("help") || config_path.empty()) {
     cli.printMessage();
     return 0;
   }
@@ -36,57 +35,82 @@ int main(int argc, char * argv[])
   tools::Plotter plotter;
   tools::Recorder recorder;
 
+  io::OVGimbal gimbal(config_path);
   io::Camera camera(config_path);
-  io::CBoard cboard(config_path);
 
-  auto_aim::Detector detector(config_path);
-  auto_aim::Solver solver(config_path);
   auto_aim::YOLO yolo(config_path);
+  auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
+  constexpr bool aimer_to_now = true;
+
+  tools::logger()->info(
+    "[OVGimbal] Minimal chain enabled: OVGimbal + Camera + YOLO + Tracker + Aimer + Shooter");
+  tools::logger()->info("[OVGimbal] timing config: offset={:.2f}ms", gimbal.offset_ms());
 
   cv::Mat img;
-  Eigen::Quaterniond q;
-  std::chrono::steady_clock::time_point t;
-
-  auto mode = io::Mode::idle;
-  auto last_mode = io::Mode::idle;
-
-  auto t0 = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point timestamp;
+  int frame_count = 0;
 
   while (!exiter.exit()) {
-    camera.read(img, t);
-    q = cboard.imu_at_image(t);
-    mode = cboard.mode;
-    // recorder.record(img, q, t);
-    if (last_mode != mode) {
-      tools::logger()->info("Switch to {}", io::MODES[mode]);
-      last_mode = mode;
+    try {
+      camera.read(img, timestamp);
+      if (img.empty()) {
+        tools::logger()->warn("读取到空图像，跳过此帧");
+        continue;
+      }
+    } catch (const std::exception & e) {
+      tools::logger()->error("读取摄像机图像失败: {}", e.what());
+      continue;
     }
 
-    /// 自瞄
+    frame_count++;
+
+    Eigen::Quaterniond q = gimbal.imu_at_image(timestamp);
     solver.set_R_gimbal2world(q);
+    recorder.record(img, q, timestamp);
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+    double roll = ypr[2] * 57.3;
+    double pitch = ypr[1] * 57.3;
+    double yaw = ypr[0] * 57.3;
 
-    auto armors = detector.detect(img);
+    auto yolo_start = std::chrono::steady_clock::now();
+    auto armors = yolo.detect(img, frame_count);
+    auto yolo_end = std::chrono::steady_clock::now();
 
-    auto targets = tracker.track(armors, t);
+    auto tracker_start = std::chrono::steady_clock::now();
+    auto targets = tracker.track(armors, timestamp);
+    auto tracker_end = std::chrono::steady_clock::now();
 
-    auto command = aimer.aim(targets, t, cboard.bullet_speed);
+    auto aimer_start = std::chrono::steady_clock::now();
+    auto command = aimer.aim(targets, timestamp, gimbal.bullet_speed(), aimer_to_now);
+    auto aimer_end = std::chrono::steady_clock::now();
 
     command.shoot = shooter.shoot(command, aimer, targets, ypr);
+    gimbal.send(command);
 
-    cboard.send(command);
+    double yolo_time = tools::delta_time(yolo_end, yolo_start) * 1e3;
+    double tracker_time = tools::delta_time(tracker_end, tracker_start) * 1e3;
+    double aimer_time = tools::delta_time(aimer_end, aimer_start) * 1e3;
+    double total_time = tools::delta_time(aimer_end, yolo_start) * 1e3;
 
-    /// debug
     tools::draw_text(img, fmt::format("[{}]", tracker.state()), {10, 30}, {255, 255, 255});
+    tools::draw_text(
+      img,
+      fmt::format(
+        "Cmd: yaw={:.2f}, pitch={:.2f}, shoot={}", command.yaw * 57.3, command.pitch * 57.3,
+        command.shoot),
+      {10, 60}, {154, 50, 205});
+    tools::draw_text(
+      img, fmt::format("Attitude: R={:.1f}, P={:.1f}, Y={:.1f}", roll, pitch, yaw), {10, 90},
+      {255, 255, 255});
+    tools::draw_text(
+      img, fmt::format("Time: YOLO={:.1f}ms, Total={:.1f}ms", yolo_time, total_time), {10, 120},
+      {0, 255, 255});
 
     nlohmann::json data;
-    data["t"] = tools::delta_time(std::chrono::steady_clock::now(), t0);
-
-    // 装甲板原始观测数据
     data["armor_num"] = armors.size();
     if (!armors.empty()) {
       auto min_x = 1e10;
@@ -96,7 +120,7 @@ int main(int argc, char * argv[])
           min_x = a.center.x;
           armor = a;
         }
-      }  //always left
+      }
       solver.solve(armor);
       data["armor_x"] = armor.xyz_in_world[0];
       data["armor_y"] = armor.xyz_in_world[1];
@@ -106,8 +130,6 @@ int main(int argc, char * argv[])
 
     if (!targets.empty()) {
       auto target = targets.front();
-
-      // 当前帧target更新后
       std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
       for (const Eigen::Vector4d & xyza : armor_xyza_list) {
         auto image_points =
@@ -115,7 +137,6 @@ int main(int argc, char * argv[])
         tools::draw_points(img, image_points, {0, 255, 0});
       }
 
-      // aimer瞄准位置
       auto aim_point = aimer.debug_aim_point;
       Eigen::Vector4d aim_xyza = aim_point.xyza;
       auto image_points =
@@ -125,7 +146,6 @@ int main(int argc, char * argv[])
       else
         tools::draw_points(img, image_points, {255, 0, 0});
 
-      // 观测器内部数据
       Eigen::VectorXd x = target.ekf_x();
       data["x"] = x[0];
       data["vx"] = x[1];
@@ -139,33 +159,28 @@ int main(int argc, char * argv[])
       data["l"] = x[9];
       data["h"] = x[10];
       data["last_id"] = target.last_id;
-
-      // 卡方检验数据
-      data["residual_yaw"] = target.ekf().data.at("residual_yaw");
-      data["residual_pitch"] = target.ekf().data.at("residual_pitch");
-      data["residual_distance"] = target.ekf().data.at("residual_distance");
-      data["residual_angle"] = target.ekf().data.at("residual_angle");
-      data["nis"] = target.ekf().data.at("nis");
-      data["nees"] = target.ekf().data.at("nees");
-      data["nis_fail"] = target.ekf().data.at("nis_fail");
-      data["nees_fail"] = target.ekf().data.at("nees_fail");
-      data["recent_nis_failures"] = target.ekf().data.at("recent_nis_failures");
     }
 
-    // 云台响应情况
-    data["gimbal_yaw"] = ypr[0] * 57.3;
-    data["gimbal_pitch"] = ypr[1] * 57.3;
-    data["bullet_speed"] = cboard.bullet_speed;
+    data["gimbal_roll"] = roll;
+    data["gimbal_pitch"] = pitch;
+    data["gimbal_yaw"] = yaw;
+    data["bullet_speed"] = gimbal.bullet_speed();
     if (command.control) {
       data["cmd_yaw"] = command.yaw * 57.3;
       data["cmd_pitch"] = command.pitch * 57.3;
       data["cmd_shoot"] = command.shoot;
     }
+
+    data["yolo_time"] = yolo_time;
+    data["tracker_time"] = tracker_time;
+    data["aimer_time"] = aimer_time;
+    data["total_time"] = total_time;
+
     plotter.plot(data);
 
-    cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
-    cv::imshow("reprojection", img);
-    auto key = cv::waitKey(1);
+    cv::resize(img, img, {}, 0.5, 0.5);
+    cv::imshow("OVGimbal Auto Aim Test", img);
+    auto key = cv::waitKey(30);
     if (key == 'q') break;
   }
 

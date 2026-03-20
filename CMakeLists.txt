@@ -36,6 +36,8 @@ add_executable(auto_buff_debug src/auto_buff_debug.cpp)
 add_executable(auto_buff_debug_mpc src/auto_buff_debug_mpc.cpp)
 add_executable(uav src/uav.cpp)
 add_executable(uav_debug src/uav_debug.cpp)
+add_executable(ovgimbal_auto_aim_test src/ovgimbal_auto_aim_test.cpp)
+add_executable(ovgimbal_mpc src/ovgimbal_mpc.cpp)
 
 target_link_libraries(standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
@@ -46,6 +48,8 @@ target_link_libraries(auto_buff_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff
 target_link_libraries(auto_buff_debug_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io ${CERES_LIBRARIES})
 target_link_libraries(uav ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(uav_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+target_link_libraries(ovgimbal_auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+target_link_libraries(ovgimbal_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
 ##################calibration################
 add_executable(capture calibration/capture.cpp)
@@ -102,15 +106,8 @@ target_link_libraries(planner_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim too
 add_executable(planner_test_offline tests/planner_test_offline.cpp)
 target_link_libraries(planner_test_offline ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
-# 检查 ROS 环境
-find_package(ament_cmake QUIET)
-find_package(rclcpp QUIET)
-find_package(std_msgs QUIET)
-find_package(rosidl_typesupport_cpp QUIET)
-find_package(sp_msgs QUIET)
-# 只有在找到 ROS 环境时才会添加 sentry 和 publish_test
-if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_cpp_FOUND AND sp_msgs_FOUND)
-    # 编译 sentry 和 publish_test
+# 只有在 io 子目录成功生成对应的可选 ROS2 库时，才编译相关入口。
+if(TARGET io_ros2_nav)
     add_executable(sentry src/sentry.cpp)
     add_executable(sentry_bp src/sentry_bp.cpp)
     add_executable(sentry_debug src/sentry_debug.cpp)
@@ -119,13 +116,22 @@ if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_
     add_executable(subscribe_test tests/subscribe_test.cpp)
     add_executable(topic_loop_test tests/topic_loop_test.cpp)
 
-    target_link_libraries(sentry ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
-    target_link_libraries(sentry_bp ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
-    target_link_libraries(sentry_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
-    target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
-    target_link_libraries(publish_test ${OpenCV_LIBS} fmt::fmt tools io auto_aim)
-    target_link_libraries(subscribe_test ${OpenCV_LIBS} fmt::fmt tools io)
-    target_link_libraries(topic_loop_test ${OpenCV_LIBS} fmt::fmt tools io)
+    target_link_libraries(sentry ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_ros2_nav)
+    target_link_libraries(sentry_bp ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_ros2_nav)
+    target_link_libraries(sentry_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_ros2_nav)
+    target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_ros2_nav)
+    target_link_libraries(publish_test ${OpenCV_LIBS} fmt::fmt tools io auto_aim io_ros2_nav)
+    target_link_libraries(subscribe_test ${OpenCV_LIBS} fmt::fmt tools io io_ros2_nav)
+    target_link_libraries(topic_loop_test ${OpenCV_LIBS} fmt::fmt tools io io_ros2_nav)
 else()
-    message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
+    message(STATUS "io_ros2_nav target unavailable, skipping sentry and ROS2 nav tests.")
+endif()
+
+if(TARGET io_ros2_gimbal)
+    add_executable(ovsentry_auto_aim_test src/ovsentry_auto_aim_test.cpp)
+    add_executable(ovsentry_mpc src/ovsentry_mpc.cpp)
+    target_link_libraries(ovsentry_auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_ros2_gimbal)
+    target_link_libraries(ovsentry_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_ros2_gimbal)
+else()
+    message(STATUS "io_ros2_gimbal target unavailable, skipping ovsentry_auto_aim_test and ovsentry_mpc.")
 endif()
