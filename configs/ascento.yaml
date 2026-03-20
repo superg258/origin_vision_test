@@ -1,15 +1,15 @@
-# enemy_color: "red"
-enemy_color: "blue"
+enemy_color: "red"
+# enemy_color: "blue"
 
 #####-----神经网络参数-----#####
 yolo_name: yolov5
 classify_model: assets/tiny_resnet.onnx
 yolo11_model_path: assets/yolo11.xml
 yolov8_model_path: assets/yolov8.xml
-yolov5_model_path: assets/yolov5.xml
+yolov5_model_path: assets/yolov5_0526.xml
 device: GPU
 min_confidence: 0.8
-use_traditional: false
+use_traditional: true
 
 #####-----ROI-----#####
 roi: 
@@ -38,17 +38,17 @@ max_temp_lost_count: 15
 outpost_max_temp_lost_count: 75
 
 #####-----aimer参数-----#####
-yaw_offset: 1.5 # degree
-pitch_offset: -0.5 # degree
+yaw_offset: 0.5 # degree
+pitch_offset: -1.0 # degree
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 decision_speed: 7 # rad/s
-high_speed_delay_time: 0.050 # s
-low_speed_delay_time: 0.015 # s
+high_speed_delay_time: 0.090 # s
+low_speed_delay_time: 0.080 # s
 
 #####-----shooter参数-----#####
-first_tolerance: 100 # 近距离射击容差，degree
-second_tolerance: 100 # 远距离射击容差，degree
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree
 judge_distance: 2 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 
@@ -59,13 +59,17 @@ vid_pid: "2bdf:0001"
 
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0,  0, 0, 1]
 
-# 重投影误差: 0.1488px
-camera_matrix: [1775.1300101814929, 0, 710.22041588791421, 0, 1777.9427175568535, 599.38373307949621, 0, 0, 1]
-distort_coeffs: [-0.081907189655237952, 0.14019999270205855, -0.0012264127665053185, 0.0014292255962000792, 0]
+# 重投影误差: 0.2460px
+camera_matrix: [1797.5969210084497, 0, 704.29881863698699, 0, 1797.7867973769753, 537.02448196123203, 0, 0, 1]
+distort_coeffs: [-0.087666128664286636, 0.22065090602894918, -0.00012832454592968064, 0.00058739756422585129, 0]
 
-# 相机同理想情况的偏角: yaw1.81 pitch0.16 roll-0.00 degree
-R_camera2gimbal: [-0.03152275773856239, 0.0027095830669845509, 0.99949936163269204, -0.99950303430107212, -9.8404785402239625e-05, -0.031522606799691932, 1.2942398579498703e-05, -0.99999632423129503, 0.0027113384873522772]
-t_camera2gimbal: [0.13895789074180098, 0.066620637390426771, 0.028079650211170731]
+# 相机同理想情况的偏角: yaw-1.95 pitch-1.85 roll0.00 degree
+R_camera2gimbal: [ -0.008726535498, 0.017451741903, 0.999809624020, -0.999961923064, -0.000152299044, -0.008725206405, 0.000000000000, -0.999847695156, 0.017452406437 ]
+t_camera2gimbal: [0.092317072966267857, -0.0037162449022158732, 0.08695273622026739]
+
+#####-----时序参数-----#####
+timing:
+  offset: -0.002 # s, 串口姿态固定时间补偿
 
 
 #####-----cboard参数-----#####
