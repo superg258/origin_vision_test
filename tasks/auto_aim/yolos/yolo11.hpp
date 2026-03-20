@@ -16,7 +16,9 @@ namespace auto_aim
 class YOLO11 : public YOLOBase
 {
 public:
-  YOLO11(const std::string & config_path, bool debug);
+  YOLO11(
+    const std::string & config_path, bool debug,
+    const std::string & device_key = "auto_aim_device");
 
   std::list<Armor> detect(const cv::Mat & bgr_img, int frame_count) override;
 

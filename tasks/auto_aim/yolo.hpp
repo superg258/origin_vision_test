@@ -19,7 +19,9 @@ public:
 class YOLO
 {
 public:
-  YOLO(const std::string & config_path, bool debug = true);
+  YOLO(
+    const std::string & config_path, bool debug = true,
+    const std::string & device_key = "auto_aim_device");
 
   std::list<Armor> detect(const cv::Mat & img, int frame_count = -1);
 

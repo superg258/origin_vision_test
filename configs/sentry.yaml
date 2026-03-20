@@ -7,31 +7,36 @@ yolo_name: yolov5
 classify_model: assets/tiny_resnet.onnx
 yolo11_model_path: assets/yolo11.xml
 yolov8_model_path: assets/yolov8.xml
-yolov5_model_path: assets/yolov5.xml
+yolov5_model_path: assets/yolov5_0526.xml
 device: GPU
+auto_aim_device: GPU
+omni_device: NPU
 min_confidence: 0.8
 use_traditional: true
 
 #####-----ROI-----#####
 roi: 
   x: 420
-  y: 50
+  y: 350
   width: 600
   height: 600
 
 use_roi: false
 
 #####-----USB相机参数-----#####
-image_width: 1280
-image_height: 720
+image_width: 1920
+image_height: 1080
 fov_h: 57.7 #87.7
 fov_v: 56.7 
 new_fov_h: 27 #67
 new_fov_v: 40.9
-usb_frame_rate: 120
+usb_frame_rate: 50
 usb_exposure: 500 #1-80000______250
 usb_gamma: 160
-usb_gain: 10 #0-96
+usb_gain: 60 #0-96
+omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.1:1.0-video-index0"
+omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
+omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
@@ -97,12 +102,10 @@ mode: 1
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
-# 重投影误差: 0.1833px
-camera_matrix: [2414.9359264386621, 0, 717.26243105567414, 0, 2418.0489262208148, 582.68540529942845, 0, 0, 1]
-distort_coeffs: [-0.0209453389287673, 0.15028138841073832, -0.0006517722113234505, -0.0016861906197686788, 0]
+# 相机同理想情况的偏角: yaw1 pitch0.8 roll0.48 degree
+R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
+t_camera2gimbal: [0.081834836810026332, 0.0038077150929364738, 0.087564665738670097]
 
-# 相机同理想情况的偏角: yaw-1.11 pitch0.01 roll-0.06 degree
-# 标定板到世界坐标系原点的水平距离: 1.20 m
-# 标定板同竖直摆放时的偏角: yaw123.89 pitch14.05 roll-0.86 degree
-R_camera2gimbal: [0.01928451708725664, 0.00012696140743255463, 0.99981402834802846, -0.99981344688553653, -0.0010834913551969569, 0.019284643459122196, 0.0010857382619952124, -0.99999940496346484, 0.00010604311483339372]
-t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.094139945222010288]
+# 重投影误差: 0.2408px
+camera_matrix: [1819.6288746257767, 0, 710.02392632862222, 0, 1820.2802320435612, 563.68047553227132, 0, 0, 1]
+distort_coeffs: [-0.072363804824114322, 0.18129952721338904, 0.0010944209124647635, 0.0011406459460747969, 0]

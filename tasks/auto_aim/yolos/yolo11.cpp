@@ -10,13 +10,19 @@
 
 namespace auto_aim
 {
-YOLO11::YOLO11(const std::string & config_path, bool debug)
+YOLO11::YOLO11(const std::string & config_path, bool debug, const std::string & device_key)
 : debug_(debug), detector_(config_path, false)
 {
   auto yaml = YAML::LoadFile(config_path);
 
   model_path_ = yaml["yolo11_model_path"].as<std::string>();
-  device_ = yaml["device"].as<std::string>();
+  if (yaml[device_key]) {
+    device_ = yaml[device_key].as<std::string>();
+  } else if (yaml["device"]) {
+    device_ = yaml["device"].as<std::string>();
+  } else {
+    throw std::runtime_error("No inference device configured in yaml!");
+  }
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
   int x = 0, y = 0, width = 0, height = 0;
