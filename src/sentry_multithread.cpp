@@ -110,7 +110,8 @@ int main(int argc, char * argv[])
     }
 
     /// 发射逻辑
-    command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
+    command.shoot =
+      shooter.shoot(command, aimer, targets, gimbal_pos, tracker.state() == "tracking");
     // command.shoot = false;
 
     cboard.send(command);

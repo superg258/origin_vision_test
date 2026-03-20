@@ -87,6 +87,9 @@ first_tolerance: 2 # 近距离射击容差，degree
 second_tolerance: 0.8 # 远距离射击容差，degree
 judge_distance: 0.5 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
+high_spin_force_fire_enabled: false
+high_spin_force_fire_enter_speed: 12.0 # rad/s
+high_spin_force_fire_exit_speed: 9.0 # rad/s
 
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

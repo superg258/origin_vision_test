@@ -93,7 +93,8 @@ int main(int argc, char * argv[])
       command = aimer.aim(targets, timestamp, cboard.bullet_speed, cboard.shoot_mode);
 
     /// 发射逻辑
-    command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
+    command.shoot =
+      shooter.shoot(command, aimer, targets, gimbal_pos, tracker.state() == "tracking");
 
     cboard.send(command);
 

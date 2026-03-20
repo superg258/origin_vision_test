@@ -1,5 +1,8 @@
 #include "shooter.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include <yaml-cpp/yaml.h>
 
 #include "tools/logger.hpp"
@@ -7,23 +10,51 @@
 
 namespace auto_aim
 {
-Shooter::Shooter(const std::string & config_path) : last_command_{false, false, 0, 0}
+Shooter::Shooter(const std::string & config_path)
+: last_command_{false, false, 0, 0}, high_spin_force_fire_active_{false}
 {
   auto yaml = YAML::LoadFile(config_path);
   first_tolerance_ = yaml["first_tolerance"].as<double>() / 57.3;    // degree to rad
   second_tolerance_ = yaml["second_tolerance"].as<double>() / 57.3;  // degree to rad
   judge_distance_ = yaml["judge_distance"].as<double>();
   auto_fire_ = yaml["auto_fire"].as<bool>();
+  high_spin_force_fire_enabled_ = yaml["high_spin_force_fire_enabled"].as<bool>(false);
+  high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(12.0);
+  high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
+  if (high_spin_force_fire_exit_speed_ > high_spin_force_fire_enter_speed_) {
+    high_spin_force_fire_exit_speed_ = std::max(0.0, high_spin_force_fire_enter_speed_ * 0.75);
+  }
 }
 
 bool Shooter::shoot(
   const io::Command & command, const auto_aim::Aimer & aimer,
-  const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos)
+  const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos,
+  bool tracker_tracking)
 {
-  if (!command.control || targets.empty() || !auto_fire_) return false;
+  if (!command.control || targets.empty() || !auto_fire_) {
+    high_spin_force_fire_active_ = false;
+    return false;
+  }
 
-  auto target_x = targets.front().ekf_x()[0];
-  auto target_y = targets.front().ekf_x()[2];
+  const auto & target = targets.front();
+  const auto angular_speed = std::abs(target.ekf_x()[7]);
+  const bool aim_locked = tracker_tracking && aimer.debug_aim_point.valid;
+
+  if (!high_spin_force_fire_enabled_ || !aim_locked) {
+    high_spin_force_fire_active_ = false;
+  } else if (high_spin_force_fire_active_) {
+    if (angular_speed < high_spin_force_fire_exit_speed_) high_spin_force_fire_active_ = false;
+  } else if (angular_speed > high_spin_force_fire_enter_speed_) {
+    high_spin_force_fire_active_ = true;
+  }
+
+  if (high_spin_force_fire_active_) {
+    last_command_ = command;
+    return true;
+  }
+
+  auto target_x = target.ekf_x()[0];
+  auto target_y = target.ekf_x()[2];
   auto tolerance = std::sqrt(tools::square(target_x) + tools::square(target_y)) > judge_distance_
                      ? second_tolerance_
                      : first_tolerance_;

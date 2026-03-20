@@ -88,7 +88,7 @@ int main(int argc, char * argv[])
     auto command = aimer.aim(targets, timestamp, gimbal.bullet_speed(), aimer_to_now);
     auto aimer_end = std::chrono::steady_clock::now();
 
-    command.shoot = shooter.shoot(command, aimer, targets, ypr);
+    command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker.state() == "tracking");
     gimbal.send(command);
 
     double yolo_time = tools::delta_time(yolo_end, yolo_start) * 1e3;

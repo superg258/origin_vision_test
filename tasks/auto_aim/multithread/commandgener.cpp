@@ -27,10 +27,10 @@ CommandGener::~CommandGener()
 
 void CommandGener::push(
   const std::list<auto_aim::Target> & targets, const std::chrono::steady_clock::time_point & t,
-  double bullet_speed, const Eigen::Vector3d & gimbal_pos)
+  double bullet_speed, const Eigen::Vector3d & gimbal_pos, bool tracker_tracking)
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  latest_ = {targets, t, bullet_speed, gimbal_pos};
+  latest_ = {targets, t, bullet_speed, gimbal_pos, tracker_tracking};
   cv_.notify_one();
 }
 
@@ -48,7 +48,8 @@ void CommandGener::generate_command()
     }
     if (input) {
       auto command = aimer_.aim(input->targets_, input->t, input->bullet_speed);
-      command.shoot = shooter_.shoot(command, aimer_, input->targets_, input->gimbal_pos);
+      command.shoot = shooter_.shoot(
+        command, aimer_, input->targets_, input->gimbal_pos, input->tracker_tracking);
       command.horizon_distance = input->targets_.empty()
                                    ? 0
                                    : std::sqrt(

@@ -354,7 +354,7 @@ int main(int argc, char * argv[])
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
     }
 
-    command.shoot = shooter.shoot(command, aimer, targets, ypr);
+    command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker.state() == "tracking");
     gimbal->send(command);
 
     const double yolo_time = tools::delta_time(t1, t0) * 1e3;

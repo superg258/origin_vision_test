@@ -15,14 +15,19 @@ public:
 
   bool shoot(
     const io::Command & command, const auto_aim::Aimer & aimer,
-    const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos);
+    const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos,
+    bool tracker_tracking);
 
 private:
   io::Command last_command_;
   double judge_distance_;
   double first_tolerance_;
   double second_tolerance_;
+  double high_spin_force_fire_enter_speed_;
+  double high_spin_force_fire_exit_speed_;
   bool auto_fire_;
+  bool high_spin_force_fire_enabled_;
+  bool high_spin_force_fire_active_;
 };
 }  // namespace auto_aim
 

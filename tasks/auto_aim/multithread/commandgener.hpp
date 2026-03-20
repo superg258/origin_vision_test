@@ -25,7 +25,7 @@ public:
 
   void push(
     const std::list<auto_aim::Target> & targets, const std::chrono::steady_clock::time_point & t,
-    double bullet_speed, const Eigen::Vector3d & gimbal_pos);
+    double bullet_speed, const Eigen::Vector3d & gimbal_pos, bool tracker_tracking);
 
 private:
   struct Input
@@ -35,6 +35,7 @@ private:
     // std::function<void()> decide;
     double bullet_speed;
     Eigen::Vector3d gimbal_pos;
+    bool tracker_tracking;
   };
 
   io::CBoard & cboard_;

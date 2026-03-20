@@ -76,7 +76,7 @@ int main(int argc, char * argv[])
 
     auto command = aimer.aim(targets, t, cboard.bullet_speed);
 
-    command.shoot = shooter.shoot(command, aimer, targets, ypr);
+    command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker.state() == "tracking");
 
     cboard.send(command);
 

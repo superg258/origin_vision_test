@@ -95,7 +95,8 @@ int main(int argc, char * argv[])
 
       auto targets = tracker.track(armors, t);
 
-      commandgener.push(targets, t, cboard.bullet_speed, ypr);  // 发送给决策线程
+      commandgener.push(
+        targets, t, cboard.bullet_speed, ypr, tracker.state() == "tracking");  // 发送给决策线程
 
     }
 

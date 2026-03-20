@@ -66,7 +66,7 @@ int main(int argc, char * argv[])
 
     auto command = aimer.aim(targets, t, 22);
 
-    shooter.shoot(command, aimer, targets, gimbal_pos);
+    shooter.shoot(command, aimer, targets, gimbal_pos, tracker.state() == "tracking");
 
     auto dt = tools::delta_time(t, last_t);
     last_t = t;
