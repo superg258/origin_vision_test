@@ -99,6 +99,9 @@ high_spin_force_fire_exit_speed: 9.0 # rad/s
 
 #####-----decider参数-----#####
 mode: 1
+omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
+omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
+omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换
 
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

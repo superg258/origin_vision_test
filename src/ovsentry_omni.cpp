@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <list>
 #include <memory>
 #include <optional>
@@ -79,6 +80,18 @@ std::pair<double, double> calc_delta_angle_deg(
   const double delta_yaw = cam.center_yaw_deg + (0.5 - armor.center_norm.x) * cam.fov_h_deg;
   const double delta_pitch = (armor.center_norm.y - 0.5) * cam.fov_v_deg;
   return {delta_yaw, delta_pitch};
+}
+
+double angular_distance_deg(double lhs_rad, double rhs_rad)
+{
+  return std::abs(tools::limit_rad(lhs_rad - rhs_rad)) * 57.3;
+}
+
+std::chrono::milliseconds compute_omni_hold_duration(double rotate_angle_deg)
+{
+  const double clamped_angle_deg = std::clamp(std::abs(rotate_angle_deg), 0.0, 180.0);
+  const auto hold_ms = static_cast<int>(std::lround(80.0 + 220.0 * (clamped_angle_deg / 180.0)));
+  return std::chrono::milliseconds(hold_ms);
 }
 
 void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
@@ -178,8 +191,13 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
   const bool display = !cli.has("no-display");
   constexpr bool aimer_to_now = true;
-  constexpr auto omni_yaw_hold_duration = std::chrono::milliseconds(300);
   constexpr auto omni_read_timeout = std::chrono::milliseconds(10);
+  const double omni_retarget_cooldown_s =
+    yaml["omni_retarget_cooldown_s"] ? yaml["omni_retarget_cooldown_s"].as<double>() : 2.5;
+  const double omni_retarget_min_delta_deg =
+    yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
+  const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(omni_retarget_cooldown_s));
 
   std::unique_ptr<io::ROS2Gimbal> gimbal;
   std::unique_ptr<io::Camera> auto_aim_camera;
@@ -228,6 +246,11 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point ts_left, ts_right, ts_back;
   std::optional<io::Command> omni_hold_command;
   std::chrono::steady_clock::time_point omni_hold_deadline{};
+  int omni_hold_duration_ms = 0;
+  std::optional<io::Command> last_accepted_omni_command;
+  std::optional<double> last_accepted_omni_yaw;
+  std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
+  bool prev_omni_mode = false;
   int frame_count = 0;
 
   while (!exiter.exit()) {
@@ -264,6 +287,23 @@ int main(int argc, char * argv[])
     bool omni_mode = (tracker.state() == "lost");
     std::optional<double> omni_target_abs_yaw_deg;
     std::optional<OmniInferenceResult> best_omni_result;
+    std::optional<double> omni_candidate_delta_deg;
+    bool omni_retarget_blocked = false;
+    bool omni_retarget_cd_active = false;
+    double omni_retarget_remaining_ms = 0.0;
+    const auto now = std::chrono::steady_clock::now();
+
+    if (omni_mode && !prev_omni_mode) {
+      omni_hold_command.reset();
+      last_accepted_omni_command.reset();
+      last_accepted_omni_yaw.reset();
+      omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+    } else if (!omni_mode && prev_omni_mode) {
+      omni_hold_command.reset();
+      last_accepted_omni_command.reset();
+      last_accepted_omni_yaw.reset();
+      omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+    }
 
     if (omni_mode) {
       const bool left_ok = cam_left.read_with_timeout(left_img, ts_left, omni_read_timeout);
@@ -340,23 +380,52 @@ int main(int argc, char * argv[])
       try_update_best(right_result);
       try_update_best(back_result);
 
+      omni_retarget_cd_active =
+        last_accepted_omni_command.has_value() && now < omni_retarget_cooldown_deadline;
+      if (omni_retarget_cd_active) {
+        omni_retarget_remaining_ms =
+          std::chrono::duration<double, std::milli>(omni_retarget_cooldown_deadline - now).count();
+      }
+
       if (best_omni_result.has_value()) {
         const double target_yaw =
           tools::limit_rad(ypr[0] + best_omni_result->delta_yaw_deg / 57.3);
         const double target_pitch = 0.1;
+        io::Command candidate_command{true, false, target_yaw, target_pitch};
+        candidate_command.big_yaw = target_yaw;
+        candidate_command.small_yaw = target_yaw;
+        candidate_command.has_target_yaw = true;
 
-        command = io::Command{true, false, target_yaw, target_pitch};
-        command.big_yaw = target_yaw;
-        command.small_yaw = target_yaw;
-        command.has_target_yaw = true;
+        const bool has_last_target = last_accepted_omni_yaw.has_value();
+        const double candidate_delta_deg =
+          has_last_target ? angular_distance_deg(target_yaw, last_accepted_omni_yaw.value()) : 0.0;
+        omni_candidate_delta_deg = candidate_delta_deg;
+        const bool is_large_retarget =
+          has_last_target && candidate_delta_deg >= omni_retarget_min_delta_deg;
+        const auto omni_yaw_hold_duration = compute_omni_hold_duration(angular_distance_deg(target_yaw, ypr[0]));
+        omni_hold_duration_ms = static_cast<int>(omni_yaw_hold_duration.count());
 
-        omni_hold_command = command;
-        omni_hold_deadline = std::chrono::steady_clock::now() + omni_yaw_hold_duration;
-
-        omni_target_abs_yaw_deg = target_yaw * 57.3;
-      } else if (
-        omni_hold_command.has_value() && std::chrono::steady_clock::now() < omni_hold_deadline)
-      {
+        if (!is_large_retarget || !omni_retarget_cd_active) {
+          command = candidate_command;
+          omni_hold_command = command;
+          omni_hold_deadline = now + omni_yaw_hold_duration;
+          last_accepted_omni_command = command;
+          last_accepted_omni_yaw = target_yaw;
+          if (!has_last_target || is_large_retarget) {
+            omni_retarget_cooldown_deadline = now + omni_retarget_cooldown;
+            omni_retarget_cd_active = true;
+            omni_retarget_remaining_ms = omni_retarget_cooldown_s * 1e3;
+          }
+          omni_target_abs_yaw_deg = target_yaw * 57.3;
+        } else if (last_accepted_omni_command.has_value()) {
+          command = last_accepted_omni_command.value();
+          omni_target_abs_yaw_deg = command.yaw * 57.3;
+          omni_retarget_blocked = true;
+        }
+      } else if (last_accepted_omni_command.has_value() && omni_retarget_cd_active) {
+        command = last_accepted_omni_command.value();
+        omni_target_abs_yaw_deg = command.yaw * 57.3;
+      } else if (omni_hold_command.has_value() && now < omni_hold_deadline) {
         command = omni_hold_command.value();
         omni_target_abs_yaw_deg = command.yaw * 57.3;
         omni_hold_applied = true;
@@ -386,9 +455,15 @@ int main(int argc, char * argv[])
     data["cmd_pitch"] = command.pitch * 57.3;
     if (omni_target_abs_yaw_deg.has_value()) data["omni_target_yaw"] = omni_target_abs_yaw_deg.value();
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;
+    data["omni_hold_duration_ms"] = omni_hold_duration_ms;
+    data["omni_retarget_cd_active"] = omni_retarget_cd_active ? 1 : 0;
+    data["omni_retarget_blocked"] = omni_retarget_blocked ? 1 : 0;
+    data["omni_retarget_remaining_ms"] = omni_retarget_remaining_ms;
+    if (omni_candidate_delta_deg.has_value()) data["omni_candidate_delta_deg"] = omni_candidate_delta_deg.value();
     data["yolo_time"] = yolo_time;
     plotter.plot(data);
 
+    prev_omni_mode = omni_mode;
     if (!display) continue;
 
     tools::draw_text(main_img, fmt::format("[{}]", tracker.state()), {10, 30}, {255, 255, 255}, 0.8, 2);
@@ -407,7 +482,19 @@ int main(int argc, char * argv[])
         {10, 120}, {0, 255, 255}, 0.8, 2);
     }
     if (omni_hold_applied) {
-      tools::draw_text(main_img, "omni yaw hold (0.3s)", {10, 150}, {0, 180, 255}, 0.8, 2);
+      tools::draw_text(
+        main_img, fmt::format("omni yaw hold ({}ms)", omni_hold_duration_ms), {10, 150},
+        {0, 180, 255}, 0.8, 2);
+    }
+    if (omni_retarget_cd_active) {
+      tools::draw_text(
+        main_img, fmt::format("omni retarget cd {:.0f}ms", omni_retarget_remaining_ms), {10, 180},
+        omni_retarget_blocked ? cv::Scalar(0, 180, 255) : cv::Scalar(255, 220, 0), 0.8, 2);
+    }
+    if (omni_candidate_delta_deg.has_value()) {
+      tools::draw_text(
+        main_img, fmt::format("omni candidate delta={:.1f} deg", omni_candidate_delta_deg.value()),
+        {10, 210}, {255, 255, 0}, 0.8, 2);
     }
 
     cv::Mat left_show = left_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : left_img.clone();

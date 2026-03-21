@@ -1,12 +1,16 @@
 #include <fmt/core.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <opencv2/opencv.hpp>
 #include <thread>
+#include <yaml-cpp/yaml.h>
 
 #include "io/camera.hpp"
 #include "io/cboard.hpp"
@@ -28,6 +32,14 @@
 
 using namespace std::chrono;
 
+namespace
+{
+double angular_distance_deg(double lhs_rad, double rhs_rad)
+{
+  return std::abs(tools::limit_rad(lhs_rad - rhs_rad)) * 57.3;
+}
+}  // namespace
+
 const std::string keys =
   "{help h usage ? |                     | 输出命令行参数说明}"
   "{@config-path   | configs/sentry.yaml | 位置参数，yaml配置文件路径 }";
@@ -44,6 +56,15 @@ int main(int argc, char * argv[])
     return 0;
   }
   auto config_path = cli.get<std::string>(0);
+  auto yaml = YAML::LoadFile(config_path);
+  const double omni_retarget_cooldown_s =
+    yaml["omni_retarget_cooldown_s"] ? yaml["omni_retarget_cooldown_s"].as<double>() : 2.5;
+  const double omni_retarget_min_delta_deg =
+    yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
+  const double omni_detection_stale_ms =
+    yaml["omni_detection_stale_ms"] ? yaml["omni_detection_stale_ms"].as<double>() : 120.0;
+  const auto omni_retarget_cooldown = duration_cast<steady_clock::duration>(
+    duration<double>(omni_retarget_cooldown_s));
 
   io::ROS2 ros2;
   io::CBoard cboard(config_path);
@@ -65,7 +86,10 @@ int main(int argc, char * argv[])
   omniperception::DetectionResult switch_target;
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
-  io::Command last_command;
+  std::optional<io::Command> last_accepted_omni_command;
+  std::optional<double> last_accepted_omni_yaw;
+  steady_clock::time_point omni_retarget_cooldown_deadline{};
+  bool prev_omni_redirect_mode = false;
 
   while (!exiter.exit()) {
     camera.read(img, timestamp);
@@ -85,12 +109,31 @@ int main(int argc, char * argv[])
     decider.set_priority(armors);
 
     auto detection_queue = perceptron.get_detection_queue();
+    detection_queue.erase(
+      std::remove_if(
+        detection_queue.begin(), detection_queue.end(),
+        [&](const auto & dr) {
+          return tools::delta_time(timestamp, dr.timestamp) * 1e3 > omni_detection_stale_ms;
+        }),
+      detection_queue.end());
 
     decider.sort(detection_queue);
 
     auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
 
     io::Command command{false, false, 0, 0};
+    const bool omni_redirect_mode =
+      (tracker.state() == "switching") || (tracker.state() == "lost");
+
+    if (omni_redirect_mode && !prev_omni_redirect_mode) {
+      last_accepted_omni_command.reset();
+      last_accepted_omni_yaw.reset();
+      omni_retarget_cooldown_deadline = steady_clock::time_point{};
+    } else if (!omni_redirect_mode && prev_omni_redirect_mode) {
+      last_accepted_omni_command.reset();
+      last_accepted_omni_yaw.reset();
+      omni_retarget_cooldown_deadline = steady_clock::time_point{};
+    }
 
     /// 全向感知逻辑
     if (tracker.state() == "switching") {
@@ -109,6 +152,34 @@ int main(int argc, char * argv[])
       command = aimer.aim(targets, timestamp, cboard.bullet_speed);
     }
 
+    if (omni_redirect_mode) {
+      const auto now = steady_clock::now();
+      const bool cooldown_active =
+        last_accepted_omni_command.has_value() && now < omni_retarget_cooldown_deadline;
+
+      if (command.control) {
+        const bool has_last_target = last_accepted_omni_yaw.has_value();
+        const double candidate_delta_deg =
+          has_last_target ? angular_distance_deg(command.yaw, last_accepted_omni_yaw.value()) : 0.0;
+        const bool is_large_retarget =
+          has_last_target && candidate_delta_deg >= omni_retarget_min_delta_deg;
+
+        if (!is_large_retarget || !cooldown_active) {
+          last_accepted_omni_command = command;
+          last_accepted_omni_yaw = command.yaw;
+          if (!has_last_target || is_large_retarget) {
+            omni_retarget_cooldown_deadline = now + omni_retarget_cooldown;
+          }
+        } else if (last_accepted_omni_command.has_value()) {
+          command = last_accepted_omni_command.value();
+        } else {
+          command = io::Command{false, false, 0, 0};
+        }
+      } else if (last_accepted_omni_command.has_value() && cooldown_active) {
+        command = last_accepted_omni_command.value();
+      }
+    }
+
     /// 发射逻辑
     command.shoot =
       shooter.shoot(command, aimer, targets, gimbal_pos, tracker.state() == "tracking");
@@ -120,6 +191,7 @@ int main(int argc, char * argv[])
     Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
 
     ros2.publish(target_info);
+    prev_omni_redirect_mode = omni_redirect_mode;
   }
 
   return 0;
