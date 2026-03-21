@@ -179,6 +179,7 @@ int main(int argc, char * argv[])
   const bool display = !cli.has("no-display");
   constexpr bool aimer_to_now = true;
   constexpr auto omni_yaw_hold_duration = std::chrono::milliseconds(300);
+  constexpr auto omni_read_timeout = std::chrono::milliseconds(10);
 
   std::unique_ptr<io::ROS2Gimbal> gimbal;
   std::unique_ptr<io::Camera> auto_aim_camera;
@@ -265,16 +266,29 @@ int main(int argc, char * argv[])
     std::optional<OmniInferenceResult> best_omni_result;
 
     if (omni_mode) {
-      cam_left.read(left_img, ts_left);
-      cam_right.read(right_img, ts_right);
-      cam_back.read(back_img, ts_back);
+      const bool left_ok = cam_left.read_with_timeout(left_img, ts_left, omni_read_timeout);
+      const bool right_ok = cam_right.read_with_timeout(right_img, ts_right, omni_read_timeout);
+      const bool back_ok = cam_back.read_with_timeout(back_img, ts_back, omni_read_timeout);
+
+      if (!left_ok) left_img.release();
+      if (!right_ok) right_img.release();
+      if (!back_ok) back_img.release();
 
       auto t_omni0 = std::chrono::steady_clock::now();
-      auto left_armors = yolo_omni_left->detect(left_img, frame_count);
+      std::list<auto_aim::Armor> left_armors;
+      if (left_ok && !left_img.empty()) {
+        left_armors = yolo_omni_left->detect(left_img, frame_count);
+      }
       auto t_omni1 = std::chrono::steady_clock::now();
-      auto right_armors = yolo_omni_right->detect(right_img, frame_count);
+      std::list<auto_aim::Armor> right_armors;
+      if (right_ok && !right_img.empty()) {
+        right_armors = yolo_omni_right->detect(right_img, frame_count);
+      }
       auto t_omni2 = std::chrono::steady_clock::now();
-      auto back_armors = yolo_omni_back->detect(back_img, frame_count);
+      std::list<auto_aim::Armor> back_armors;
+      if (back_ok && !back_img.empty()) {
+        back_armors = yolo_omni_back->detect(back_img, frame_count);
+      }
       auto t_omni3 = std::chrono::steady_clock::now();
 
       decider->armor_filter(left_armors);
@@ -329,7 +343,7 @@ int main(int argc, char * argv[])
       if (best_omni_result.has_value()) {
         const double target_yaw =
           tools::limit_rad(ypr[0] + best_omni_result->delta_yaw_deg / 57.3);
-        const double target_pitch = -(ypr[1] + best_omni_result->delta_pitch_deg / 57.3);
+        const double target_pitch = 0.1;
 
         command = io::Command{true, false, target_yaw, target_pitch};
         command.big_yaw = target_yaw;
@@ -400,6 +414,17 @@ int main(int argc, char * argv[])
     cv::Mat right_show =
       right_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : right_img.clone();
     cv::Mat back_show = back_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : back_img.clone();
+
+    tools::draw_text(main_img, "MAIN (AUTO AIM)", {10, 180}, {0, 255, 0}, 0.8, 2);
+    tools::draw_text(
+      left_show, fmt::format("LEFT ({:.0f} deg)", left_cam_cfg.center_yaw_deg), {10, 30},
+      left_cam_cfg.color, 0.8, 2);
+    tools::draw_text(
+      right_show, fmt::format("RIGHT ({:.0f} deg)", right_cam_cfg.center_yaw_deg), {10, 30},
+      right_cam_cfg.color, 0.8, 2);
+    tools::draw_text(
+      back_show, fmt::format("BACK ({:.0f} deg)", back_cam_cfg.center_yaw_deg), {10, 30},
+      back_cam_cfg.color, 0.8, 2);
 
     if (best_omni_result.has_value()) {
       const auto & best = best_omni_result.value();

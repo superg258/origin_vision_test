@@ -90,6 +90,19 @@ void USBCamera::read(cv::Mat & img, std::chrono::steady_clock::time_point & time
   timestamp = data.timestamp;
 }
 
+bool USBCamera::read_with_timeout(
+  cv::Mat & img, std::chrono::steady_clock::time_point & timestamp, std::chrono::milliseconds timeout)
+{
+  CameraData data;
+  if (!queue_.pop_for(data, timeout)) {
+    return false;
+  }
+
+  img = data.img;
+  timestamp = data.timestamp;
+  return true;
+}
+
 void USBCamera::open()
 {
   std::lock_guard<std::mutex> lock(cap_mutex_);

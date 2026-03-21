@@ -17,6 +17,9 @@ public:
   ~USBCamera();
   cv::Mat read();
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
+  bool read_with_timeout(
+    cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+    std::chrono::milliseconds timeout);
   std::string device_name;
 
 private:
