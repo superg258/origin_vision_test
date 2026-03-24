@@ -94,6 +94,13 @@ std::chrono::milliseconds compute_omni_hold_duration(double rotate_angle_deg)
   return std::chrono::milliseconds(hold_ms);
 }
 
+double get_horizon_distance(const std::list<auto_aim::Target> & targets)
+{
+  if (targets.empty()) return 0.0;
+  const auto & ekf_x = targets.front().ekf_x();
+  return std::sqrt(ekf_x[0] * ekf_x[0] + ekf_x[2] * ekf_x[2]);
+}
+
 void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 {
   tools::draw_text(
@@ -438,6 +445,7 @@ int main(int argc, char * argv[])
     }
 
     command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker.state() == "tracking");
+    command.horizon_distance = command.control ? get_horizon_distance(targets) : 0.0;
     gimbal->send(command);
 
     const double yolo_time = tools::delta_time(t1, t0) * 1e3;
@@ -453,6 +461,7 @@ int main(int argc, char * argv[])
     data["cmd_shoot"] = command.shoot ? 1 : 0;
     data["cmd_yaw"] = command.yaw * 57.3;
     data["cmd_pitch"] = command.pitch * 57.3;
+    data["horizon_distance"] = command.horizon_distance;
     if (omni_target_abs_yaw_deg.has_value()) data["omni_target_yaw"] = omni_target_abs_yaw_deg.value();
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;
     data["omni_hold_duration_ms"] = omni_hold_duration_ms;
