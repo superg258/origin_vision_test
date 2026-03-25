@@ -37,6 +37,11 @@ usb_gain: 60 #0-96
 omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.3:1.0-video-index0"
 omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.4:1.0-video-index0"
 omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.1:1.0-video-index0"
+omni_left_yaw_deg: 60.0
+omni_right_yaw_deg: -60.0
+omni_back_yaw_deg: 180.0
+omni_fov_h_deg: 120.0
+omni_fov_v_deg: 67.0
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"

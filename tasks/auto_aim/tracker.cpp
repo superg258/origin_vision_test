@@ -99,8 +99,10 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
   std::chrono::steady_clock::time_point t, bool use_enemy_color)
 {
-  omniperception::DetectionResult switch_target{std::list<Armor>(), t, 0, 0};
-  omniperception::DetectionResult temp_target{std::list<Armor>(), t, 0, 0};
+  omniperception::DetectionResult switch_target;
+  switch_target.timestamp = t;
+  omniperception::DetectionResult temp_target;
+  temp_target.timestamp = t;
   if (!detection_queue.empty()) {
     temp_target = detection_queue.front();
   }
@@ -141,8 +143,8 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
     state_ == "tracking" && !temp_target.armors.empty() &&
     temp_target.armors.front().priority < target_.priority && target_.convergened()) {
     state_ = "switching";
-    switch_target = omniperception::DetectionResult{
-      temp_target.armors, t, temp_target.delta_yaw, temp_target.delta_pitch};
+    switch_target = temp_target;
+    switch_target.timestamp = t;
     omni_target_priority_ = temp_target.armors.front().priority;
     found = false;
     tools::logger()->debug("omniperception find higher priority target");

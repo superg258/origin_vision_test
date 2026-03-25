@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <opencv2/opencv.hpp>
 
@@ -109,24 +110,27 @@ io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue
 Eigen::Vector2d Decider::delta_angle(
   const std::list<auto_aim::Armor> & armors, const std::string & camera)
 {
-  Eigen::Vector2d delta_angle;
   if (camera == "left") {
-    delta_angle[0] = 62 + (new_fov_h_ / 2) - armors.front().center_norm.x * new_fov_h_;
-    delta_angle[1] = armors.front().center_norm.y * new_fov_v_ - new_fov_v_ / 2;
-    return delta_angle;
+    return delta_angle(
+      armors, CameraSpec{OmniCameraSlot::left, "left", "", 62.0, new_fov_h_, new_fov_v_});
   }
 
-  else if (camera == "right") {
-    delta_angle[0] = -62 + (new_fov_h_ / 2) - armors.front().center_norm.x * new_fov_h_;
-    delta_angle[1] = armors.front().center_norm.y * new_fov_v_ - new_fov_v_ / 2;
-    return delta_angle;
+  if (camera == "right") {
+    return delta_angle(
+      armors, CameraSpec{OmniCameraSlot::right, "right", "", -62.0, new_fov_h_, new_fov_v_});
   }
 
-  else {
-    delta_angle[0] = 170 + (54.2 / 2) - armors.front().center_norm.x * 54.2;
-    delta_angle[1] = armors.front().center_norm.y * 44.5 - 44.5 / 2;
-    return delta_angle;
-  }
+  return delta_angle(armors, CameraSpec{OmniCameraSlot::back, camera, "", 170.0, 54.2, 44.5});
+}
+
+Eigen::Vector2d Decider::delta_angle(
+  const std::list<auto_aim::Armor> & armors, const CameraSpec & camera_spec)
+{
+  Eigen::Vector2d delta_angle;
+  delta_angle[0] =
+    camera_spec.center_yaw_deg + (0.5 - armors.front().center_norm.x) * camera_spec.fov_h_deg;
+  delta_angle[1] = armors.front().center_norm.y * camera_spec.fov_v_deg - camera_spec.fov_v_deg / 2;
+  return delta_angle;
 }
 
 bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
@@ -178,6 +182,13 @@ void Decider::sort(std::vector<DetectionResult> & detection_queue)
     dr.armors.sort(
       [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
   }
+
+  detection_queue.erase(
+    std::remove_if(
+      detection_queue.begin(), detection_queue.end(),
+      [](const DetectionResult & dr) { return dr.armors.empty(); }),
+    detection_queue.end());
+  if (detection_queue.empty()) return;
 
   // 根据优先级对 DetectionResult 进行排序
   std::sort(

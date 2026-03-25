@@ -5,6 +5,7 @@
 #include <iostream>
 #include <list>
 #include <unordered_map>
+#include <vector>
 
 #include "detection.hpp"
 #include "io/camera.hpp"
@@ -32,6 +33,8 @@ public:
 
   Eigen::Vector2d delta_angle(
     const std::list<auto_aim::Armor> & armors, const std::string & camera);
+  Eigen::Vector2d delta_angle(
+    const std::list<auto_aim::Armor> & armors, const CameraSpec & camera_spec);
 
   bool armor_filter(std::list<auto_aim::Armor> & armors);
 
