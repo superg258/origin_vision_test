@@ -66,7 +66,7 @@ std::vector<std::pair<std::string, std::string>> build_type_candidates(
 void deserialize_gimbal_status(
   const rclcpp::SerializedMessage & serialized_message, double & pitch_deg, double & roll_deg,
   double & yaw_deg, uint8_t & mode, Eigen::Quaterniond & q, double & yaw_vel_deg,
-  double & pitch_vel_deg, double & bullet_speed)
+  double & pitch_vel_deg, double & bullet_speed, double & big_yaw_deg, bool & has_big_yaw)
 {
   const auto & raw = serialized_message.get_rcl_serialized_message();
   eprosima::fastcdr::FastBuffer buffer(reinterpret_cast<char *>(raw.buffer), raw.buffer_length);
@@ -106,6 +106,17 @@ void deserialize_gimbal_status(
   yaw_vel_deg = small_yaw_speed;
   pitch_vel_deg = pitch_speed;
   bullet_speed = bullet_speed_raw;
+
+  has_big_yaw = false;
+  big_yaw_deg = 0.0;
+  try {
+    float big_yaw = 0.0f;
+    cdr >> big_yaw;
+    big_yaw_deg = big_yaw;
+    has_big_yaw = std::isfinite(big_yaw_deg);
+  } catch (const std::exception &) {
+    has_big_yaw = false;
+  }
 }
 
 rclcpp::SerializedMessage serialize_gimbal_cmd(
@@ -256,9 +267,12 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
     double yaw_vel_deg = 0.0;
     double pitch_vel_deg = 0.0;
     double bullet_speed = 0.0;
+    double big_yaw_deg = 0.0;
+    bool has_big_yaw = false;
 
     deserialize_gimbal_status(
-      *message, pitch_deg, roll_deg, yaw_deg, mode_raw, q, yaw_vel_deg, pitch_vel_deg, bullet_speed);
+      *message, pitch_deg, roll_deg, yaw_deg, mode_raw, q, yaw_vel_deg, pitch_vel_deg,
+      bullet_speed, big_yaw_deg, has_big_yaw);
 
     if (!is_valid_quaternion(q)) {
       q = quaternion_from_deg_euler(yaw_deg, pitch_deg, roll_deg);
@@ -279,6 +293,8 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
       yaw_vel_ = deg2rad(yaw_vel_deg);
       pitch_vel_ = deg2rad(pitch_vel_deg);
       bullet_speed_ = bullet_speed;
+      big_yaw_ = deg2rad(big_yaw_deg);
+      has_big_yaw_ = has_big_yaw;
 
       switch (mode_raw) {
         case 0:
@@ -406,7 +422,7 @@ Mode ROS2Gimbal::mode() const
 ROS2GimbalState ROS2Gimbal::state() const
 {
   std::lock_guard<std::mutex> lk(mtx_);
-  return {yaw_, yaw_vel_, pitch_, pitch_vel_, bullet_speed_};
+  return {yaw_, yaw_vel_, pitch_, pitch_vel_, bullet_speed_, big_yaw_, has_big_yaw_};
 }
 
 }  // namespace io

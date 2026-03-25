@@ -23,6 +23,8 @@ struct ROS2GimbalState
   double pitch;
   double pitch_vel;
   double bullet_speed;
+  double big_yaw;
+  bool has_big_yaw;
 };
 
 class ROS2Gimbal
@@ -88,6 +90,8 @@ private:
   double yaw_vel_ = 0.0;
   double pitch_vel_ = 0.0;
   double bullet_speed_ = 23.0;
+  double big_yaw_ = 0.0;
+  bool has_big_yaw_ = false;
 
   BridgeConfig bridge_config_;
   std::chrono::microseconds imu_query_offset_{-1000};

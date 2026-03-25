@@ -43,6 +43,7 @@
 - `io/ros2/ros2_gimbal.hpp/.cpp`
   - 新增基于 `GenericPublisher/GenericSubscription` 的云台桥。
   - 状态侧：从 YAML 读取 `status_topic/cmd_topic/msg_type`，反序列化 `Gimbal` 状态消息，恢复姿态、模式、角速度、弹速。
+  - 兼容扩展：在现有状态字段后允许追加一个尾字段 `gimbal_big_yaw(float32, deg, 连续角)`；`ROS2Gimbal` 会按可选字段读取，缺失时保持旧协议兼容。
   - 控制侧：序列化 `GimbalCmd`，按 `pitch/big_yaw/small_yaw/fire/target_distance` 输出。
   - 若上层没填写 `big_yaw/small_yaw`，会退化为 `command.yaw` 双写，并打一次 warning。
 

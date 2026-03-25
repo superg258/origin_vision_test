@@ -71,6 +71,7 @@ ros2_gimbal:
   node_name: "nav_gimbal_bridge"
   status_topic: "/serial/gimbal_status"
   cmd_topic: "/serial/process_gimbal"
+  # 状态消息兼容旧格式；若电控在末尾追加 float32 gimbal_big_yaw(deg, 连续角)，ovsentry_omni 会优先使用它作为 omni 基准 yaw。
   status_msg_type: "rm_interfaces/msg/Gimbal"
   cmd_msg_type: "rm_interfaces/msg/GimbalCmd"
 
