@@ -258,7 +258,6 @@ int main(int argc, char * argv[])
   std::optional<double> last_accepted_omni_yaw;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   bool prev_omni_mode = false;
-  bool warned_missing_big_yaw = false;
   int frame_count = 0;
 
   while (!exiter.exit()) {
@@ -282,7 +281,6 @@ int main(int argc, char * argv[])
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
     const auto gimbal_state = gimbal->state();
     double omni_base_yaw_rad = ypr[0];
-    bool omni_using_big_yaw = false;
 
     auto t0 = std::chrono::steady_clock::now();
     auto armors = yolo_auto.detect(main_img, frame_count);
@@ -317,15 +315,8 @@ int main(int argc, char * argv[])
     }
 
     if (omni_mode) {
-      if (gimbal_state.has_big_yaw) {
-        omni_base_yaw_rad = gimbal_state.big_yaw;
-        omni_using_big_yaw = true;
-      } else if (!warned_missing_big_yaw) {
-        tools::logger()->warn(
-          "[OVSentryOmni] gimbal status tail big_yaw is missing, falling back to small-yaw base.");
-        warned_missing_big_yaw = true;
-      }
-
+      omni_base_yaw_rad = gimbal_state.big_yaw;
+    
       const bool left_ok = cam_left.read_with_timeout(left_img, ts_left, omni_read_timeout);
       const bool right_ok = cam_right.read_with_timeout(right_img, ts_right, omni_read_timeout);
       const bool back_ok = cam_back.read_with_timeout(back_img, ts_back, omni_read_timeout);
@@ -408,9 +399,7 @@ int main(int argc, char * argv[])
       }
 
       if (best_omni_result.has_value()) {
-        const double raw_target_yaw = omni_base_yaw_rad + best_omni_result->delta_yaw_deg / 57.3;
-        const double target_yaw =
-          omni_using_big_yaw ? raw_target_yaw : tools::limit_rad(raw_target_yaw);
+        const double target_yaw = tools::limit_rad(omni_base_yaw_rad + best_omni_result->delta_yaw_deg / 57.3);
         const double target_pitch = 0.1;
         io::Command candidate_command{true, false, target_yaw, target_pitch};
         candidate_command.big_yaw = target_yaw;
@@ -472,9 +461,8 @@ int main(int argc, char * argv[])
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_small_yaw"] = ypr[0] * 57.3;
     data["gimbal_pitch"] = ypr[1] * 57.3;
-    if (gimbal_state.has_big_yaw) data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
+    data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
     data["omni_base_yaw"] = omni_base_yaw_rad * 57.3;
-    data["omni_using_big_yaw"] = omni_using_big_yaw ? 1 : 0;
     data["bullet_speed"] = gimbal->bullet_speed();
     data["cmd_control"] = command.control ? 1 : 0;
     data["cmd_shoot"] = command.shoot ? 1 : 0;
@@ -511,9 +499,8 @@ int main(int argc, char * argv[])
     tools::draw_text(
       main_img,
       fmt::format(
-        "omni base yaw={:.2f} ({})", omni_base_yaw_rad * 57.3,
-        omni_using_big_yaw ? "big" : "small"),
-      {10, 120}, omni_using_big_yaw ? cv::Scalar(0, 220, 255) : cv::Scalar(180, 180, 180), 0.8, 2);
+        "omni base yaw={:.2f}", omni_base_yaw_rad * 57.3),
+      {10, 120}, cv::Scalar(0, 220, 255), 0.8, 2);
     if (omni_target_abs_yaw_deg.has_value()) {
       tools::draw_text(
         main_img, fmt::format("omni target yaw={:.2f} deg", omni_target_abs_yaw_deg.value()),
