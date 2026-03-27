@@ -5,6 +5,8 @@
 #include <memory>
 #include <thread>
 
+#include <yaml-cpp/yaml.h>
+
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
@@ -27,6 +29,10 @@ Perceptron::Perceptron(
 Perceptron::Perceptron(const std::vector<WorkerConfig> & workers, const std::string & config_path)
 : detection_queue_(10), worker_configs_(workers), decider_(config_path), stop_flag_(false)
 {
+  auto yaml = YAML::LoadFile(config_path);
+  const auto read_timeout_ms =
+    yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10;
+  read_timeout_ = std::chrono::milliseconds(std::max(read_timeout_ms, 1));
   debug_snapshots_.resize(worker_configs_.size());
   yolo_workers_.reserve(worker_configs_.size());
 
@@ -100,23 +106,74 @@ void Perceptron::parallel_infer(
     tools::logger()->error("Camera pointer is null!");
     return;
   }
-  try {
-    while (true) {
-      cv::Mat usb_img;
-      std::chrono::steady_clock::time_point ts;
+  auto update_snapshot = [&](const cv::Mat & image, std::chrono::steady_clock::time_point timestamp,
+                             const std::optional<auto_aim::Armor> & top_armor, double delta_yaw_deg,
+                             double delta_pitch_deg, double infer_ms, double base_yaw_rad,
+                             bool has_detection, bool camera_online, int timeout_count) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto it = std::find_if(
+        worker_configs_.begin(), worker_configs_.end(),
+        [&](const auto & candidate) { return candidate.camera == worker.camera; });
+      if (it == worker_configs_.end()) return;
 
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (stop_flag_) break;  // 检查是否需要退出
+      const size_t index = static_cast<size_t>(std::distance(worker_configs_.begin(), it));
+      auto & snapshot = debug_snapshots_[index];
+      if (worker.camera_spec.has_value()) {
+        snapshot.spec = worker.camera_spec.value();
+      } else {
+        snapshot.spec.label = worker.camera_label;
       }
+      snapshot.image = image.empty() ? cv::Mat() : image.clone();
+      snapshot.timestamp = timestamp;
+      snapshot.top_armor = top_armor;
+      snapshot.delta_yaw_deg = delta_yaw_deg;
+      snapshot.delta_pitch_deg = delta_pitch_deg;
+      snapshot.infer_ms = infer_ms;
+      snapshot.base_yaw_rad = base_yaw_rad;
+      snapshot.has_base_yaw = static_cast<bool>(worker.base_yaw_provider);
+      snapshot.has_detection = has_detection;
+      snapshot.camera_online = camera_online;
+      snapshot.consecutive_timeout_count = timeout_count;
+    };
 
-      cam->read(usb_img, ts);
-      const double base_yaw_rad = worker.base_yaw_provider ? worker.base_yaw_provider() : 0.0;
-      if (usb_img.empty()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
-        continue;
-      }
+  int consecutive_timeout_count = 0;
+  while (true) {
+    cv::Mat usb_img;
+    std::chrono::steady_clock::time_point ts{};
 
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (stop_flag_) break;  // 检查是否需要退出
+    }
+
+    const double base_yaw_rad = worker.base_yaw_provider ? worker.base_yaw_provider() : 0.0;
+    bool frame_ready = false;
+    try {
+      frame_ready = cam->read_with_timeout(usb_img, ts, read_timeout_);
+    } catch (const std::exception & e) {
+      consecutive_timeout_count++;
+      tools::logger()->warn(
+        "[Perceptron:{}] read exception: {}", worker.camera_label.empty() ? cam->device_name : worker.camera_label,
+        e.what());
+      update_snapshot(
+        {}, std::chrono::steady_clock::now(), std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, false, false,
+        consecutive_timeout_count);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      continue;
+    }
+
+    if (!frame_ready || usb_img.empty()) {
+      consecutive_timeout_count++;
+      update_snapshot(
+        {}, std::chrono::steady_clock::now(), std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, false, false,
+        consecutive_timeout_count);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      continue;
+    }
+
+    consecutive_timeout_count = 0;
+
+    try {
       const auto infer_begin = std::chrono::steady_clock::now();
       auto armors = yolov8_parallel->detect(usb_img);
       const auto infer_end = std::chrono::steady_clock::now();
@@ -151,33 +208,17 @@ void Perceptron::parallel_infer(
         detection_queue_.push(dr);  // 推入线程安全队列
       }
 
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = std::find_if(
-          worker_configs_.begin(), worker_configs_.end(),
-          [&](const auto & candidate) { return candidate.camera == worker.camera; });
-        if (it != worker_configs_.end()) {
-          const size_t index = static_cast<size_t>(std::distance(worker_configs_.begin(), it));
-          auto & snapshot = debug_snapshots_[index];
-          if (worker.camera_spec.has_value()) {
-            snapshot.spec = worker.camera_spec.value();
-          } else {
-            snapshot.spec.label = worker.camera_label;
-          }
-          snapshot.image = usb_img.clone();
-          snapshot.timestamp = ts;
-          snapshot.top_armor = top_armor;
-          snapshot.delta_yaw_deg = delta_yaw_deg;
-          snapshot.delta_pitch_deg = delta_pitch_deg;
-          snapshot.infer_ms = infer_ms;
-          snapshot.base_yaw_rad = base_yaw_rad;
-          snapshot.has_base_yaw = static_cast<bool>(worker.base_yaw_provider);
-          snapshot.has_detection = top_armor.has_value();
-        }
-      }
+      update_snapshot(
+        usb_img, ts, top_armor, delta_yaw_deg, delta_pitch_deg, infer_ms, base_yaw_rad,
+        top_armor.has_value(), true, consecutive_timeout_count);
+    } catch (const std::exception & e) {
+      tools::logger()->warn(
+        "[Perceptron:{}] infer exception: {}",
+        worker.camera_label.empty() ? cam->device_name : worker.camera_label, e.what());
+      update_snapshot(
+        usb_img, ts, std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, false, true, consecutive_timeout_count);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-  } catch (const std::exception & e) {
-    tools::logger()->error("Exception in parallel_infer: {}", e.what());
   }
 }
 

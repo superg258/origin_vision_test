@@ -19,6 +19,7 @@ USBCamera::USBCamera(const std::string & open_name, const std::string & config_p
   usb_frame_rate_ = tools::read<double>(yaml, "usb_frame_rate");
   usb_gamma_ = tools::read<double>(yaml, "usb_gamma");
   usb_gain_ = tools::read<double>(yaml, "usb_gain");
+  max_reopen_attempts_ = yaml["usb_max_reopen_attempts"] ? yaml["usb_max_reopen_attempts"].as<int>() : 20;
   try_open();
 
   // 守护线程
@@ -29,7 +30,7 @@ USBCamera::USBCamera(const std::string & open_name, const std::string & config_p
 
       if (ok_) continue;
 
-      if (open_count_ > 20) {
+      if (max_reopen_attempts_ > 0 && open_count_ >= max_reopen_attempts_) {
         tools::logger()->warn("Give up to open {} USB camera", this->device_name);
         quit_ = true;
 
@@ -170,8 +171,9 @@ void USBCamera::try_open()
 {
   try {
     open();
-    open_count_++;
+    open_count_ = cap_.isOpened() ? 0 : (open_count_ + 1);
   } catch (const std::exception & e) {
+    open_count_++;
     tools::logger()->warn("{}", e.what());
   }
 }

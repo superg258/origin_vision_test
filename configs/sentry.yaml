@@ -34,6 +34,8 @@ usb_frame_rate: 50
 usb_exposure: 500 #1-80000______250
 usb_gamma: 160
 usb_gain: 60 #0-96
+usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
+omni_camera_read_timeout_ms: 10
 omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.3:1.0-video-index0"
 omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.4:1.0-video-index0"
 omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.1:1.0-video-index0"
@@ -108,6 +110,7 @@ mode: 1
 omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
 omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
 omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换
+auto_aim_temp_lost_hold_ms: 250.0 # 主相机短时丢失时保持上一帧稳定自瞄命令，避免回零
 
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

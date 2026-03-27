@@ -2,10 +2,10 @@
 #define OMNIPERCEPTION__PERCEPTRON_HPP
 
 #include <chrono>
-#include <list>
-#include <memory>
 #include <condition_variable>
 #include <functional>
+#include <list>
+#include <memory>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -46,6 +46,8 @@ public:
     double base_yaw_rad = 0.0;
     bool has_base_yaw = false;
     bool has_detection = false;
+    bool camera_online = false;
+    int consecutive_timeout_count = 0;
   };
 
   Perceptron(
@@ -70,6 +72,7 @@ private:
 
   Decider decider_;
   bool stop_flag_;
+  std::chrono::milliseconds read_timeout_{10};
   mutable std::mutex mutex_;
   std::condition_variable condition_;
 };
