@@ -186,12 +186,8 @@ int main(int argc, char * argv[])
     yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
   const double omni_detection_stale_ms =
     yaml["omni_detection_stale_ms"] ? yaml["omni_detection_stale_ms"].as<double>() : 120.0;
-  const double auto_aim_temp_lost_hold_ms =
-    yaml["auto_aim_temp_lost_hold_ms"] ? yaml["auto_aim_temp_lost_hold_ms"].as<double>() : 250.0;
   const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_retarget_cooldown_s));
-  const auto auto_aim_temp_lost_hold_duration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-    std::chrono::duration<double, std::milli>(auto_aim_temp_lost_hold_ms));
 
   tools::logger()->info(
     "[OVSentryOmni] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
@@ -264,8 +260,6 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point main_timestamp;
   std::optional<io::Command> last_accepted_omni_command;
   std::optional<double> last_accepted_omni_yaw;
-  std::optional<io::Command> last_valid_tracking_command;
-  std::chrono::steady_clock::time_point last_valid_tracking_timestamp{};
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   bool prev_omni_redirect_mode = false;
   int frame_count = 0;
@@ -316,8 +310,6 @@ int main(int argc, char * argv[])
     std::optional<std::string> omni_result_label;
     bool omni_retarget_blocked = false;
     bool omni_retarget_cd_active = false;
-    bool auto_aim_hold_applied = false;
-    double auto_aim_hold_remaining_ms = 0.0;
     double omni_retarget_remaining_ms = 0.0;
     const bool omni_redirect_mode =
       (tracker.state() == "switching") || (tracker.state() == "lost");
@@ -325,7 +317,6 @@ int main(int argc, char * argv[])
     if (omni_redirect_mode && !prev_omni_redirect_mode) {
       last_accepted_omni_command.reset();
       last_accepted_omni_yaw.reset();
-      last_valid_tracking_command.reset();
       omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
     } else if (!omni_redirect_mode && prev_omni_redirect_mode) {
       last_accepted_omni_command.reset();
@@ -357,25 +348,6 @@ int main(int argc, char * argv[])
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (command.control && !targets.empty()) {
         apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
-        last_valid_tracking_command = command;
-        last_valid_tracking_timestamp = std::chrono::steady_clock::now();
-      } else if (tracker.state() == "temp_lost" && last_valid_tracking_command.has_value()) {
-        const auto now = std::chrono::steady_clock::now();
-        const bool hold_active = now - last_valid_tracking_timestamp <= auto_aim_temp_lost_hold_duration;
-        if (hold_active) {
-          command = last_valid_tracking_command.value();
-          command.shoot = false;
-          if (!targets.empty()) {
-            command.big_yaw = target_center_big_yaw_rad(targets.front(), gimbal_state.big_yaw);
-            command.has_target_yaw = true;
-          }
-          auto_aim_hold_applied = true;
-          auto_aim_hold_remaining_ms = std::chrono::duration<double, std::milli>(
-                                          auto_aim_temp_lost_hold_duration - (now - last_valid_tracking_timestamp))
-                                          .count();
-        } else {
-          last_valid_tracking_command.reset();
-        }
       }
     }
 
@@ -448,8 +420,6 @@ int main(int argc, char * argv[])
     data["omni_retarget_remaining_ms"] = omni_retarget_remaining_ms;
     if (omni_candidate_delta_deg.has_value()) data["omni_candidate_delta_deg"] = omni_candidate_delta_deg.value();
     if (omni_result_label.has_value()) data["omni_result_camera"] = omni_result_label.value();
-    data["auto_aim_hold"] = auto_aim_hold_applied ? 1 : 0;
-    data["auto_aim_hold_remaining_ms"] = auto_aim_hold_remaining_ms;
     if (!detection_queue.empty()) {
       data["omni_measurement_age_ms"] =
         tools::delta_time(std::chrono::steady_clock::now(), detection_queue.front().timestamp) * 1e3;
@@ -473,25 +443,20 @@ int main(int argc, char * argv[])
     tools::draw_text(
       main_img, fmt::format("big_yaw={:.2f}", gimbal_state.big_yaw * 57.3), {10, 120},
       cv::Scalar(0, 220, 255), 0.8, 2);
-    if (auto_aim_hold_applied) {
-      tools::draw_text(
-        main_img, fmt::format("auto aim hold {:.0f}ms", auto_aim_hold_remaining_ms), {10, 150},
-        cv::Scalar(0, 180, 255), 0.8, 2);
-    }
     if (omni_target_abs_yaw_deg.has_value()) {
       tools::draw_text(
         main_img, fmt::format("omni target yaw={:.2f} deg", omni_target_abs_yaw_deg.value()),
-        {10, 180}, {0, 255, 255}, 0.8, 2);
+        {10, 150}, {0, 255, 255}, 0.8, 2);
     }
     if (omni_retarget_cd_active) {
       tools::draw_text(
-        main_img, fmt::format("omni retarget cd {:.0f}ms", omni_retarget_remaining_ms), {10, 210},
+        main_img, fmt::format("omni retarget cd {:.0f}ms", omni_retarget_remaining_ms), {10, 180},
         omni_retarget_blocked ? cv::Scalar(0, 180, 255) : cv::Scalar(255, 220, 0), 0.8, 2);
     }
     if (omni_candidate_delta_deg.has_value()) {
       tools::draw_text(
         main_img, fmt::format("omni candidate delta={:.1f} deg", omni_candidate_delta_deg.value()),
-        {10, 240}, {255, 255, 0}, 0.8, 2);
+        {10, 210}, {255, 255, 0}, 0.8, 2);
     }
 
     cv::Mat left_show = cv::Mat::zeros(main_img.size(), main_img.type());
