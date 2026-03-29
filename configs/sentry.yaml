@@ -36,9 +36,9 @@ usb_gamma: 160
 usb_gain: 60 #0-96
 usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
 omni_camera_read_timeout_ms: 10
-omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.3:1.0-video-index0"
-omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.4:1.0-video-index0"
-omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:6.1:1.0-video-index0"
+omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
+omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
+omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.1:1.0-video-index0"
 omni_left_yaw_deg: 60.0
 omni_right_yaw_deg: -60.0
 omni_back_yaw_deg: 180.0
@@ -47,8 +47,8 @@ omni_fov_v_deg: 67.0
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
-exposure_ms: 0.6
-gain: 16.9
+exposure_ms: 3
+gain: 16
 vid_pid: "2bdf:0001"
 
 #####-----传统方法参数-----#####
