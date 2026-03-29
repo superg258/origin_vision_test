@@ -158,8 +158,8 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     delta_angle_list.emplace_back(delta_angle);
   }
 
-  // 不考虑小陀螺
-  if (std::abs(target.ekf_x()[7]) <= 2 && target.name != ArmorName::outpost) {
+  // 不考虑小陀螺 修改这处bug会引入更多问题 TODO: 设计更合理的跳变后装甲板选择机制
+  if (std::abs(target.ekf_x()[8]) <= 2 && target.name != ArmorName::outpost) {
     // 选择在可射击范围内的装甲板
     std::vector<int> id_list;
     for (int i = 0; i < armor_num; i++) {

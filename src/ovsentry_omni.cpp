@@ -329,7 +329,7 @@ int main(int argc, char * argv[])
     if (tracker.state() == "switching") {
       command.control = !switch_target.armors.empty();
       command.shoot = false;
-      command.pitch = tools::limit_rad(switch_target.delta_pitch);
+      command.pitch = 0.001; //全向感知高度不同pitch没有意义，直接固定为0
       if (command.control) {
         const double base_yaw = switch_target.has_base_yaw ? switch_target.base_yaw_rad : gimbal_state.big_yaw;
         apply_abs_yaw_target(command, base_yaw + switch_target.delta_yaw);
@@ -341,7 +341,7 @@ int main(int argc, char * argv[])
       if (command.control && !detection_queue.empty()) {
         const auto & omni_target = detection_queue.front();
         const double base_yaw = omni_target.has_base_yaw ? omni_target.base_yaw_rad : gimbal_state.big_yaw;
-        command.pitch = tools::limit_rad(omni_target.delta_pitch);
+        command.pitch = 0.001;
         apply_abs_yaw_target(command, base_yaw + omni_target.delta_yaw);
         omni_target_abs_yaw_deg = command.yaw * 57.3;
         omni_result_label = omni_target.camera_label;
