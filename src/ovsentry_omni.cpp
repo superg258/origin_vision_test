@@ -73,13 +73,15 @@ double get_horizon_distance(const std::list<auto_aim::Target> & targets)
 }
 
 void draw_omni_overlay(
-  cv::Mat & img, const omniperception::Perceptron::DebugSnapshot & snapshot, const cv::Scalar & color)
+  cv::Mat & img, const omniperception::Perceptron::DebugSnapshot & snapshot, const cv::Scalar & color,
+  int start_y)
 {
+  constexpr int line_gap = 30;
   tools::draw_text(
-    img, fmt::format("{} {:.1f}ms", snapshot.spec.label, snapshot.infer_ms), {10, 30}, color, 0.7, 2);
+    img, fmt::format("infer {:.1f}ms", snapshot.infer_ms), {10, start_y}, color, 0.7, 2);
 
   if (!snapshot.top_armor.has_value()) {
-    tools::draw_text(img, "no target", {10, 60}, {120, 120, 120}, 0.7, 2);
+    tools::draw_text(img, "no target", {10, start_y + line_gap}, {120, 120, 120}, 0.7, 2);
     return;
   }
 
@@ -90,10 +92,10 @@ void draw_omni_overlay(
     fmt::format(
       "{} pri={} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name], static_cast<int>(armor.priority),
       armor.confidence),
-    {10, 60}, color, 0.7, 2);
+    {10, start_y + line_gap}, color, 0.7, 2);
   tools::draw_text(
     img, fmt::format("delta yaw={:.1f} pitch={:.1f}", snapshot.delta_yaw_deg, snapshot.delta_pitch_deg),
-    {10, 90}, color, 0.7, 2);
+    {10, start_y + line_gap * 2}, color, 0.7, 2);
 }
 
 cv::Mat resize_for_view(const cv::Mat & img)
@@ -498,12 +500,14 @@ int main(int argc, char * argv[])
       tools::draw_text(
         *target_view, fmt::format("{} ({:.0f} deg)", slot_name(snapshot.spec.slot), snapshot.spec.center_yaw_deg),
         {10, 30}, color, 0.8, 2);
+      int overlay_start_y = 60;
       if (!snapshot.camera_online) {
         tools::draw_text(
           *target_view, fmt::format("camera offline ({})", snapshot.consecutive_timeout_count), {10, 60},
           cv::Scalar(0, 120, 255), 0.7, 2);
+        overlay_start_y += 30;
       }
-      draw_omni_overlay(*target_view, snapshot, color);
+      draw_omni_overlay(*target_view, snapshot, color, overlay_start_y);
     }
 
     cv::Mat main_small = resize_for_view(main_img);
