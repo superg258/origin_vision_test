@@ -178,8 +178,13 @@ void Perceptron::parallel_infer(
       auto armors = yolov8_parallel->detect(usb_img);
       const auto infer_end = std::chrono::steady_clock::now();
       const double infer_ms = tools::delta_time(infer_end, infer_begin) * 1e3;
+      auto debug_armors = armors;
+      decider_.armor_filter(debug_armors);
+      decider_.set_priority(debug_armors);
+      debug_armors.sort(
+        [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
       std::optional<auto_aim::Armor> top_armor;
-      if (!armors.empty()) top_armor = armors.front();
+      if (!debug_armors.empty()) top_armor = debug_armors.front();
 
       double delta_yaw_deg = 0.0;
       double delta_pitch_deg = 0.0;
