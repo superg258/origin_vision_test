@@ -1,6 +1,7 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
@@ -55,13 +56,41 @@ int main(int argc, char * argv[])
   io::Command last_command;
   double last_t = -1;
 
-  video.set(cv::CAP_PROP_POS_FRAMES, start_index);
-  for (int i = 0; i < start_index; i++) {
-    double t, w, x, y, z;
-    text >> t >> w >> x >> y >> z;
+  // Some AVI files have no usable frame index; set() may report success but still stay at frame 0.
+  int actual_start_index = start_index;
+  auto seek_ok = video.set(cv::CAP_PROP_POS_FRAMES, start_index);
+  auto pos_after_seek = video.get(cv::CAP_PROP_POS_FRAMES);
+  bool seek_effective = seek_ok && std::abs(pos_after_seek - start_index) < 0.5;
+
+  if (!seek_effective && start_index > 0) {
+    auto reset_ok = video.set(cv::CAP_PROP_POS_FRAMES, 0);
+    if (!reset_ok) {
+      tools::logger()->warn("video reset to frame 0 failed, fallback skip may be inaccurate");
+    }
+
+    int skipped_video_frames = 0;
+    for (; skipped_video_frames < start_index; skipped_video_frames++) {
+      if (!video.grab()) break;
+    }
+    actual_start_index = skipped_video_frames;
+    tools::logger()->warn(
+      "seek to frame {} ineffective (pos {:.1f}), fallback grab skipped {} frames", start_index,
+      pos_after_seek, actual_start_index);
   }
 
-  for (int frame_count = start_index; !exiter.exit(); frame_count++) {
+  int skipped_text_lines = 0;
+  for (; skipped_text_lines < actual_start_index; skipped_text_lines++) {
+    double t, w, x, y, z;
+    if (!(text >> t >> w >> x >> y >> z)) break;
+  }
+  if (skipped_text_lines < actual_start_index) {
+    tools::logger()->warn(
+      "text stream reached EOF while skipping start index: requested {}, skipped {}", actual_start_index,
+      skipped_text_lines);
+    actual_start_index = skipped_text_lines;
+  }
+
+  for (int frame_count = actual_start_index; !exiter.exit(); frame_count++) {
     if (end_index > 0 && frame_count > end_index) break;
 
     video.read(img);
