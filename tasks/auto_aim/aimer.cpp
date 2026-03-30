@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -148,6 +149,15 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   // 如果装甲板未发生过跳变，则只有当前装甲板的位置已知
   if (!target.jumped) return {true, armor_xyza_list[0]};
 
+  double coming_angle, leaving_angle;
+  if (target.name == ArmorName::outpost) {
+    coming_angle = 70 / 57.3;
+    leaving_angle = 30 / 57.3;
+  } else {
+    coming_angle = comming_angle_;
+    leaving_angle = leaving_angle_;
+  }
+
   // 整车旋转中心的球坐标yaw
   auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
 
@@ -156,6 +166,14 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   for (int i = 0; i < armor_num; i++) {
     auto delta_angle = tools::limit_rad(armor_xyza_list[i][3] - center_yaw);
     delta_angle_list.emplace_back(delta_angle);
+  }
+
+  const int tracked_slot = std::clamp(target.tracked_slot(), 0, int(armor_num) - 1);
+  if (target.recovering()) {
+    if (std::abs(delta_angle_list[tracked_slot]) > coming_angle) {
+      return {false, armor_xyza_list[tracked_slot]};
+    }
+    return {true, armor_xyza_list[tracked_slot]};
   }
 
   // 不考虑小陀螺 修改这处bug会引入更多问题 TODO: 设计更合理的跳变后装甲板选择机制
@@ -177,7 +195,9 @@ AimPoint Aimer::choose_aim_point(const Target & target)
       int id0 = id_list[0], id1 = id_list[1];
 
       // 未处于锁定模式时，选择delta_angle绝对值较小的装甲板，进入锁定模式
-      if (lock_id_ != id0 && lock_id_ != id1)
+      if (tracked_slot == id0 || tracked_slot == id1)
+        lock_id_ = tracked_slot;
+      else if (lock_id_ != id0 && lock_id_ != id1)
         lock_id_ = (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
 
       return {true, armor_xyza_list[lock_id_]};
@@ -188,17 +208,16 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     return {true, armor_xyza_list[id_list[0]]};
   }
 
-  double coming_angle, leaving_angle;
-  if (target.name == ArmorName::outpost) {
-    coming_angle = 70 / 57.3;
-    leaving_angle = 30 / 57.3;
-  } else {
-    coming_angle = comming_angle_;
-    leaving_angle = leaving_angle_;
+  // 在小陀螺时，一侧的装甲板不断出现，另一侧的装甲板不断消失，显然前者被打中的概率更高
+  if (
+    std::abs(delta_angle_list[tracked_slot]) <= coming_angle &&
+    ((ekf_x[7] > 0 && delta_angle_list[tracked_slot] < leaving_angle) ||
+     (ekf_x[7] < 0 && delta_angle_list[tracked_slot] > -leaving_angle))) {
+    return {true, armor_xyza_list[tracked_slot]};
   }
 
-  // 在小陀螺时，一侧的装甲板不断出现，另一侧的装甲板不断消失，显然前者被打中的概率更高
   for (int i = 0; i < armor_num; i++) {
+    if (i == tracked_slot) continue;
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
     if (ekf_x[7] > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
     if (ekf_x[7] < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};

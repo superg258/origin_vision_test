@@ -1,5 +1,7 @@
 #include "target.hpp"
 
+#include <algorithm>
+#include <limits>
 #include <numeric>
 
 #include "tools/logger.hpp"
@@ -7,6 +9,25 @@
 
 namespace auto_aim
 {
+namespace
+{
+constexpr double kStableMatchDistance = 0.20;
+constexpr double kJumpMatchDistance = 0.35;
+constexpr double kMaxMatchYawDiff = 1.0;
+constexpr double kMaxBearingYawDiff = 0.85;
+constexpr double kMaxPitchDiff = 0.35;
+constexpr double kSwitchPenalty = 0.20;
+constexpr double kCrossGroupPenalty = 0.10;
+constexpr double kSwapResidualMargin = 0.03;
+constexpr double kMaxAbsL = 0.18;
+constexpr double kMaxAbsH = 0.25;
+constexpr double kMaxDeltaLPerUpdate = 0.08;
+constexpr double kMaxDeltaHPerUpdate = 0.10;
+constexpr double kCollapseHeightThreshold = 0.02;
+constexpr double kMeaningfulHeightThreshold = 0.03;
+constexpr int kRecoveryFramesAfterSwitch = 2;
+}  // namespace
+
 Target::Target(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
   Eigen::VectorXd P0_dig)
@@ -16,6 +37,7 @@ Target::Target(
   last_id(0),
   update_count_(0),
   armor_num_(armor_num),
+  recovery_frames_(0),
   t_(t),
   is_switch_(false),
   is_converged_(false),
@@ -49,7 +71,18 @@ Target::Target(
   ekf_ = tools::ExtendedKalmanFilter(x0, P0, x_add);  //初始化滤波器（预测量、预测量协方差）
 }
 
-Target::Target(double x, double vyaw, double radius, double h) : armor_num_(4)
+Target::Target(double x, double vyaw, double radius, double h)
+: name(ArmorName::not_armor),
+  armor_type(ArmorType::small),
+  priority(ArmorPriority::fifth),
+  jumped(false),
+  last_id(0),
+  armor_num_(4),
+  switch_count_(0),
+  update_count_(0),
+  recovery_frames_(0),
+  is_switch_(false),
+  is_converged_(false)
 {
   Eigen::VectorXd x0{{x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h}};
   Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
@@ -135,53 +168,90 @@ void Target::predict(double dt)
   ekf_.predict(F, Q, f);
 }
 
-void Target::update(const Armor & armor)
+Target::MatchResult Target::evaluate_match(const Armor & armor) const
 {
-  // 装甲板匹配
-  int id;
-  auto min_angle_error = 1e10;
-  const std::vector<Eigen::Vector4d> & xyza_list = armor_xyza_list();
+  MatchResult best;
+  best.score = std::numeric_limits<double>::max();
 
-  std::vector<std::pair<Eigen::Vector4d, int>> xyza_i_list;
-  for (int i = 0; i < armor_num_; i++) {
-    xyza_i_list.push_back({xyza_list[i], i});
-  }
+  const auto evaluate_slot = [&](int slot, bool swapped_groups) {
+    const auto xyz = h_armor_xyz(ekf_.x, slot, swapped_groups);
+    const auto ypd = tools::xyz2ypd(xyz);
+    const auto predicted_yaw = tools::limit_rad(ekf_.x[6] + slot * 2 * CV_PI / armor_num_);
 
-  std::sort(
-    xyza_i_list.begin(), xyza_i_list.end(),
-    [](const std::pair<Eigen::Vector4d, int> & a, const std::pair<Eigen::Vector4d, int> & b) {
-      Eigen::Vector3d ypd1 = tools::xyz2ypd(a.first.head(3));
-      Eigen::Vector3d ypd2 = tools::xyz2ypd(b.first.head(3));
-      return ypd1[2] < ypd2[2];
-    });
+    const auto position_error = (xyz - armor.xyz_in_world).norm();
+    const auto yaw_error = std::abs(tools::limit_rad(armor.ypr_in_world[0] - predicted_yaw));
+    const auto bearing_yaw_error =
+      std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
+    const auto pitch_error = std::abs(armor.ypd_in_world[1] - ypd[1]);
 
-  // 取前3个distance最小的装甲板
-  for (int i = 0; i < 3; i++) {
-    const auto & xyza = xyza_i_list[i].first;
-    Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
-    auto angle_error = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3])) +
-                       std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
+    const auto position_gate = (slot == last_id) ? kStableMatchDistance : kJumpMatchDistance;
+    const bool valid = position_error <= position_gate && yaw_error <= kMaxMatchYawDiff &&
+                       bearing_yaw_error <= kMaxBearingYawDiff && pitch_error <= kMaxPitchDiff;
 
-    if (std::abs(angle_error) < std::abs(min_angle_error)) {
-      id = xyza_i_list[i].second;
-      min_angle_error = angle_error;
+    double score =
+      position_error / kStableMatchDistance + yaw_error / kMaxMatchYawDiff +
+      bearing_yaw_error / kMaxBearingYawDiff + pitch_error / kMaxPitchDiff;
+    if (slot != last_id) score += kSwitchPenalty;
+    if (armor_num_ == 4 && (slot % 2) != (last_id % 2)) score += kCrossGroupPenalty;
+
+    return std::tuple<bool, double, double>{valid, score, position_error};
+  };
+
+  for (int slot = 0; slot < armor_num_; ++slot) {
+    if (recovery_frames_ > 0 && slot != last_id) continue;
+
+    auto [valid, score, position_error] = evaluate_slot(slot, false);
+    if (!valid) continue;
+
+    bool swap_groups = false;
+    if (armor_num_ == 4 && (slot % 2) != (last_id % 2)) {
+      auto [swap_valid, swap_score, swap_position_error] = evaluate_slot(slot, true);
+      if (
+        swap_valid &&
+        swap_position_error + kSwapResidualMargin < position_error &&
+        swap_score + kSwapResidualMargin < score) {
+        swap_groups = true;
+        score = swap_score;
+      }
+    }
+
+    if (!best.valid || score < best.score) {
+      best.valid = true;
+      best.slot = slot;
+      best.score = score;
+      best.swap_groups = swap_groups;
     }
   }
 
-  if (id != 0) jumped = true;
+  return best;
+}
 
-  if (id != last_id) {
+bool Target::update(const Armor & armor, const MatchResult & match)
+{
+  if (!match.valid) return false;
+
+  if (match.swap_groups) swap_groups();
+  const Eigen::VectorXd x_before = ekf_.x;
+  const bool slot_changed = match.slot != last_id;
+
+  if (match.slot != 0) jumped = true;
+
+  if (slot_changed) {
+    jumped = true;
     is_switch_ = true;
+    switch_count_++;
+    recovery_frames_ = kRecoveryFramesAfterSwitch;
   } else {
     is_switch_ = false;
+    recovery_frames_ = std::max(0, recovery_frames_ - 1);
   }
 
-  if (is_switch_) switch_count_++;
-
-  last_id = id;
+  last_id = match.slot;
   update_count_++;
 
-  update_ypda(armor, id);
+  update_ypda(armor, match.slot);
+  clamp_pair_state(x_before);
+  return true;
 }
 
 void Target::update_ypda(const Armor & armor, int id)
@@ -263,16 +333,75 @@ bool Target::convergened()
   return is_converged_;
 }
 
+bool Target::recovering() const { return recovery_frames_ > 0; }
+
+int Target::tracked_slot() const { return last_id; }
+
+void Target::swap_groups()
+{
+  if (armor_num_ != 4) return;
+
+  ekf_.x[4] += ekf_.x[10];
+  ekf_.x[10] = -ekf_.x[10];
+  ekf_.x[8] += ekf_.x[9];
+  ekf_.x[9] = -ekf_.x[9];
+}
+
+void Target::clamp_pair_state(const Eigen::VectorXd & x_before)
+{
+  ekf_.x[6] = tools::limit_rad(ekf_.x[6]);
+  ekf_.x[9] = std::clamp(ekf_.x[9], -kMaxAbsL, kMaxAbsL);
+  ekf_.x[10] = std::clamp(ekf_.x[10], -kMaxAbsH, kMaxAbsH);
+
+  if (armor_num_ != 4) return;
+
+  auto delta_l = std::clamp(ekf_.x[9] - x_before[9], -kMaxDeltaLPerUpdate, kMaxDeltaLPerUpdate);
+  auto delta_h = std::clamp(ekf_.x[10] - x_before[10], -kMaxDeltaHPerUpdate, kMaxDeltaHPerUpdate);
+  ekf_.x[9] = x_before[9] + delta_l;
+  ekf_.x[10] = x_before[10] + delta_h;
+
+  if (
+    std::abs(x_before[10]) > kMeaningfulHeightThreshold &&
+    x_before[10] * ekf_.x[10] < 0.0) {
+    ekf_.x[10] = x_before[10];
+  }
+
+  const auto prev_h = x_before[10];
+  const auto cur_h = ekf_.x[10];
+  if (
+    std::abs(prev_h) > kMeaningfulHeightThreshold &&
+    std::abs(cur_h) < kCollapseHeightThreshold) {
+    ekf_.x[10] = prev_h;
+  }
+}
+
 // 计算出装甲板中心的坐标（考虑长短轴）
 Eigen::Vector3d Target::h_armor_xyz(const Eigen::VectorXd & x, int id) const
+{
+  return h_armor_xyz(x, id, false);
+}
+
+Eigen::Vector3d Target::h_armor_xyz(
+  const Eigen::VectorXd & x, int id, bool swapped_groups) const
 {
   auto angle = tools::limit_rad(x[6] + id * 2 * CV_PI / armor_num_);
   auto use_l_h = (armor_num_ == 4) && (id == 1 || id == 3);
 
-  auto r = (use_l_h) ? x[8] + x[9] : x[8];
+  auto base_r = x[8];
+  auto delta_r = x[9];
+  auto base_z = x[4];
+  auto delta_z = x[10];
+  if (swapped_groups && armor_num_ == 4) {
+    base_r = x[8] + x[9];
+    delta_r = -x[9];
+    base_z = x[4] + x[10];
+    delta_z = -x[10];
+  }
+
+  auto r = (use_l_h) ? base_r + delta_r : base_r;
   auto armor_x = x[0] - r * std::cos(angle);
   auto armor_y = x[2] - r * std::sin(angle);
-  auto armor_z = (use_l_h) ? x[4] + x[10] : x[4];
+  auto armor_z = (use_l_h) ? base_z + delta_z : base_z;
 
   return {armor_x, armor_y, armor_z};
 }

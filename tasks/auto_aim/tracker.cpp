@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <tuple>
 
 #include "tools/logger.hpp"
@@ -9,6 +10,12 @@
 
 namespace auto_aim
 {
+namespace
+{
+constexpr double kKeepTrackingAreaRatio = 0.9;
+constexpr double kCurrentSlotBias = 0.25;
+}  // namespace
+
 Tracker::Tracker(const std::string & config_path, Solver & solver)
 : solver_{solver},
   detect_count_(0),
@@ -261,28 +268,45 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
   target_.predict(t);
 
   int found_count = 0;
-  double min_x = 1e10;  // 画面最左侧
+  double max_area = 0.0;
   for (const auto & armor : armors) {
     if (armor.name != target_.name || armor.type != target_.armor_type) continue;
     found_count++;
-    min_x = armor.center.x < min_x ? armor.center.x : min_x;
+    max_area = std::max(max_area, std::abs(cv::contourArea(armor.points)));
   }
 
   if (found_count == 0) return false;
 
-  for (auto & armor : armors) {
-    if (
-      armor.name != target_.name || armor.type != target_.armor_type
-      //  || armor.center.x != min_x
-    )
-      continue;
+  bool found = false;
+  std::list<Armor>::iterator best_armor = armors.end();
+  Target::MatchResult best_match;
+
+  for (auto it = armors.begin(); it != armors.end(); ++it) {
+    auto & armor = *it;
+    if (armor.name != target_.name || armor.type != target_.armor_type) continue;
 
     solver_.solve(armor);
+    auto match = target_.evaluate_match(armor);
+    if (!match.valid) continue;
 
-    target_.update(armor);
+    auto score = match.score;
+    const auto area = std::abs(cv::contourArea(armor.points));
+    if (
+      match.slot == target_.tracked_slot() && max_area > 0.0 &&
+      area >= max_area * kKeepTrackingAreaRatio) {
+      score -= kCurrentSlotBias;
+    }
+
+    if (!found || score < best_match.score) {
+      found = true;
+      best_match = match;
+      best_match.score = score;
+      best_armor = it;
+    }
   }
 
-  return true;
+  if (!found || best_armor == armors.end()) return false;
+  return target_.update(*best_armor, best_match);
 }
 
 }  // namespace auto_aim

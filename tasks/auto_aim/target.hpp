@@ -17,6 +17,14 @@ namespace auto_aim
 class Target
 {
 public:
+  struct MatchResult
+  {
+    bool valid = false;
+    int slot = 0;
+    double score = 0.0;
+    bool swap_groups = false;
+  };
+
   ArmorName name;
   ArmorType armor_type;
   ArmorPriority priority;
@@ -31,7 +39,8 @@ public:
 
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
-  void update(const Armor & armor);
+  MatchResult evaluate_match(const Armor & armor) const;
+  bool update(const Armor & armor, const MatchResult & match);
 
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;
@@ -40,6 +49,8 @@ public:
   bool diverged() const;
 
   bool convergened();
+  bool recovering() const;
+  int tracked_slot() const;
 
   bool isinit = false;
 
@@ -49,6 +60,7 @@ private:
   int armor_num_;
   int switch_count_;
   int update_count_;
+  int recovery_frames_;
 
   bool is_switch_, is_converged_;
 
@@ -56,8 +68,11 @@ private:
   std::chrono::steady_clock::time_point t_;
 
   void update_ypda(const Armor & armor, int id);  // yaw pitch distance angle
+  void swap_groups();
+  void clamp_pair_state(const Eigen::VectorXd & x_before);
 
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
+  Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id, bool swapped_groups) const;
   Eigen::MatrixXd h_jacobian(const Eigen::VectorXd & x, int id) const;
 };
 
