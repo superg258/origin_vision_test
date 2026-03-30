@@ -169,7 +169,7 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   }
 
   const int tracked_slot = std::clamp(target.tracked_slot(), 0, int(armor_num) - 1);
-  if (target.recovering()) {
+  if (!target.geometry_ready() && armor_num == 4 && target.name != ArmorName::outpost) {
     if (std::abs(delta_angle_list[tracked_slot]) > coming_angle) {
       return {false, armor_xyza_list[tracked_slot]};
     }

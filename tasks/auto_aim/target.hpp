@@ -17,14 +17,6 @@ namespace auto_aim
 class Target
 {
 public:
-  struct MatchResult
-  {
-    bool valid = false;
-    int slot = 0;
-    double score = 0.0;
-    bool swap_groups = false;
-  };
-
   ArmorName name;
   ArmorType armor_type;
   ArmorPriority priority;
@@ -39,8 +31,7 @@ public:
 
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
-  MatchResult evaluate_match(const Armor & armor) const;
-  bool update(const Armor & armor, const MatchResult & match);
+  bool update(const std::vector<const Armor *> & armors);
 
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;
@@ -49,6 +40,7 @@ public:
   bool diverged() const;
 
   bool convergened();
+  bool geometry_ready() const;
   bool recovering() const;
   int tracked_slot() const;
 
@@ -57,22 +49,37 @@ public:
   bool checkinit();
 
 private:
+  struct SlotObservation
+  {
+    const Armor * armor = nullptr;
+    int armor_index = -1;
+    int slot = 0;
+    double score = 0.0;
+    double position_error = 0.0;
+  };
+
   int armor_num_;
   int switch_count_;
   int update_count_;
-  int recovery_frames_;
 
   bool is_switch_, is_converged_;
+  bool geometry_ready_;
+  unsigned geometry_seen_mask_;
 
   tools::ExtendedKalmanFilter ekf_;
   std::chrono::steady_clock::time_point t_;
 
   void update_ypda(const Armor & armor, int id);  // yaw pitch distance angle
-  void swap_groups();
+  std::optional<SlotObservation> evaluate_slot(
+    const Armor & armor, int armor_index, int slot, double max_area) const;
+  std::optional<SlotObservation> fallback_slot(const Armor & armor, int armor_index) const;
+  void handle_jump(const SlotObservation & primary);
   void clamp_pair_state(const Eigen::VectorXd & x_before);
+  void mark_geometry_seen(const std::vector<SlotObservation> & observations);
+  Eigen::Vector3d infer_center_from_observation(const Armor & armor, int slot) const;
+  int slot_group(int slot) const;
 
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
-  Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id, bool swapped_groups) const;
   Eigen::MatrixXd h_jacobian(const Eigen::VectorXd & x, int id) const;
 };
 
