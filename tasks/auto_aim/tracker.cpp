@@ -2,6 +2,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
+#include <limits>
 #include <tuple>
 
 #include "tools/logger.hpp"
@@ -267,6 +269,36 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
   }
 
   if (found_count == 0) return false;
+
+  if (target_.is_ground_four_armor()) {
+    Armor * best_armor = nullptr;
+    double best_score = std::numeric_limits<double>::infinity();
+
+    for (auto & armor : armors) {
+      if (armor.name != target_.name || armor.type != target_.armor_type) continue;
+
+      solver_.solve(armor);
+
+      int matched_id = -1;
+      double score = target_.match_armor_score(armor, &matched_id);
+      if (!std::isfinite(score) || matched_id < 0) continue;
+
+      if (
+        best_armor == nullptr || score < best_score - 1e-6 ||
+        (std::abs(score - best_score) <= 1e-6 &&
+         (armor.center.x < best_armor->center.x ||
+          (armor.center.x == best_armor->center.x && armor.center.y < best_armor->center.y))))
+      {
+        best_armor = &armor;
+        best_score = score;
+      }
+    }
+
+    if (best_armor == nullptr) return false;
+
+    target_.update(*best_armor);
+    return true;
+  }
 
   for (auto & armor : armors) {
     if (

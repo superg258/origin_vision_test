@@ -4,7 +4,8 @@
 - 这轮 `origin_vision_new` 相对 `sp_vision_25` 的增量，主要分成两块：
   - 通信/工程边界更新：`OVGimbal`、`ROS2Gimbal`、`CBoard` 图像时间补偿、CMake 中 ROS2 可选拆库。
   - auto_aim 算法更新：`Singer`、13/15 维状态、`Target/Tracker/Aimer` 改写、配置清理、实验链路。
-- 本次移植到 `origin_vision_test` 只保留前者，算法侧仍保持 `sp_vision_25` 基线。
+- `origin_vision_test` 默认只保留前者，算法侧仍保持 `sp_vision_25` 基线。
+- 当前唯一例外是 `configs/hero.yaml`：选择性迁入 hero 专用的 `Trajectory/Aimer/Shooter` 特化，包括空气阻力弹道、`11.7m/s` 弹速兜底、低速可见板直打和高速上层中心锁定；`Singer` 与 `Target/Tracker` 重写仍不迁入。
 
 ## 逐文件审计
 
@@ -88,9 +89,19 @@
 - `tasks/auto_aim/top4_model.*`
   - `sentry_test` 分支新增 15 维实验模型。
 
-这部分不进入 `origin_vision_test`。更详细的算法对比，直接参考：
+除下述 hero 例外外，这部分不进入 `origin_vision_test`。更详细的算法对比，直接参考：
 - `origin_vision_new/docs/target_observation_prediction_vs_sp_vision_25.md`
 - `origin_vision_new/docs/origin_vision_new_vs_sp_vision_25_baseline.md`
+
+### hero 例外迁移
+- `tools/trajectory.*`
+  - 补充空气阻力弹道，供低弹速 hero 使用。
+- `tasks/auto_aim/aimer.*`
+  - 新增 `AimSolution`、`UpperCenterHold` 模式、`bullet_speed_fallback` 和 hero 低速/高速两档状态机。
+- `tasks/auto_aim/shooter.*`
+  - 将 hero 的中心保持时间窗口门控并入实际发弹判定。
+- `tests/auto_aim_test.cpp`
+  - 接入真实 `Shooter` 判定并补充 `aim_mode/impact_time_error/effective_bullet_speed` 调试输出。
 
 ## 本次迁移落点
 - 已迁入 `origin_vision_test`：
@@ -100,8 +111,9 @@
   - `Command` 双 yaw 字段
   - 顶层/IO CMake 的 ROS2 可选拆库
   - 最小联调入口与必要配置
+  - `hero.yaml` 下选择性启用的 `Trajectory/Aimer/Shooter` 特化
 - 未迁入 `origin_vision_test`：
   - `Singer`
   - `Target/Tracker/Aimer` 的建模和选板修改
   - `top4_experimental`
-  - `origin_vision_new` 中针对 sentry/hero 的算法调参
+  - `origin_vision_new` 中除 hero 上层中心锁定外的 sentry/hero 算法调参

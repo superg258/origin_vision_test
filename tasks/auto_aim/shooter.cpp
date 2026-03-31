@@ -37,10 +37,12 @@ bool Shooter::shoot(
   }
 
   const auto & target = targets.front();
+  const auto & solution = aimer.last_solution();
   const auto angular_speed = std::abs(target.ekf_x()[7]);
-  const bool aim_locked = tracker_tracking && aimer.debug_aim_point.valid;
+  const bool aim_locked = tracker_tracking && aimer.debug_aim_point.valid && solution.valid;
+  const bool upper_center_hold = solution.mode == AimMode::UpperCenterHold;
 
-  if (!high_spin_force_fire_enabled_ || !aim_locked) {
+  if (upper_center_hold || !high_spin_force_fire_enabled_ || !aim_locked) {
     high_spin_force_fire_active_ = false;
   } else if (high_spin_force_fire_active_) {
     if (angular_speed < high_spin_force_fire_exit_speed_) high_spin_force_fire_active_ = false;
@@ -58,13 +60,19 @@ bool Shooter::shoot(
   auto tolerance = std::sqrt(tools::square(target_x) + tools::square(target_y)) > judge_distance_
                      ? second_tolerance_
                      : first_tolerance_;
-  // tools::logger()->debug("d(command.yaw) is {:.4f}", std::abs(last_command_.yaw - command.yaw));
-  if (
-    std::abs(last_command_.yaw - command.yaw) < tolerance * 2 &&  //此时认为command突变不应该射击
-    std::abs(gimbal_pos[0] - last_command_.yaw) < tolerance &&    //应该减去上一次command的yaw值
-    aimer.debug_aim_point.valid) {
-    last_command_ = command;
-    return true;
+  const bool command_stable =
+    std::abs(last_command_.yaw - command.yaw) < tolerance * 2 &&
+    std::abs(last_command_.pitch - command.pitch) < tolerance * 2;
+  const bool gimbal_on_target =
+    std::abs(tools::limit_rad(gimbal_pos[0] - command.yaw)) < tolerance &&
+    std::abs(gimbal_pos[1] - command.pitch) < tolerance;
+  if (command_stable && gimbal_on_target) {
+    if (
+      !upper_center_hold ||
+      std::abs(solution.impact_time_error_s) <= aimer.center_hold_fire_window()) {
+      last_command_ = command;
+      return true;
+    }
   }
 
   last_command_ = command;

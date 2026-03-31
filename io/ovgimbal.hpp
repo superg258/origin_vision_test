@@ -60,7 +60,7 @@ private:
   double pitch_ = 0.0;
   double yaw_vel_ = 0.0;
   double pitch_vel_ = 0.0;
-  double bullet_speed_ = 23.0;
+  double bullet_speed_ = 0.0;
   IMUData data_prev_;
   IMUData data_ahead_;
   IMUData data_behind_;

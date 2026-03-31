@@ -32,6 +32,8 @@ public:
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
   void update(const Armor & armor);
+  bool is_ground_four_armor() const;
+  double match_armor_score(const Armor & armor, int * matched_id = nullptr) const;
 
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;
@@ -55,6 +57,7 @@ private:
   tools::ExtendedKalmanFilter ekf_;
   std::chrono::steady_clock::time_point t_;
 
+  void canonicalize_four_armor_state(int * matched_id = nullptr);
   void update_ypda(const Armor & armor, int id);  // yaw pitch distance angle
 
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;

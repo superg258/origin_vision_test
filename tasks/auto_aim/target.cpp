@@ -1,5 +1,6 @@
 #include "target.hpp"
 
+#include <limits>
 #include <numeric>
 
 #include "tools/logger.hpp"
@@ -133,14 +134,23 @@ void Target::predict(double dt)
     this->ekf_.x[7] = this->ekf_.x[7] > 0 ? 2.51 : -2.51;
 
   ekf_.predict(F, Q, f);
+  canonicalize_four_armor_state();
 }
 
-void Target::update(const Armor & armor)
+bool Target::is_ground_four_armor() const
 {
-  // 装甲板匹配
-  int id;
-  auto min_angle_error = 1e10;
+  return armor_num_ == 4 && name != ArmorName::outpost && name != ArmorName::base;
+}
+
+double Target::match_armor_score(const Armor & armor, int * matched_id) const
+{
+  int id = -1;
+  auto min_angle_error = std::numeric_limits<double>::infinity();
   const std::vector<Eigen::Vector4d> & xyza_list = armor_xyza_list();
+  if (xyza_list.empty()) {
+    if (matched_id != nullptr) *matched_id = -1;
+    return min_angle_error;
+  }
 
   std::vector<std::pair<Eigen::Vector4d, int>> xyza_i_list;
   for (int i = 0; i < armor_num_; i++) {
@@ -156,19 +166,54 @@ void Target::update(const Armor & armor)
     });
 
   // 取前3个distance最小的装甲板
-  for (int i = 0; i < 3; i++) {
+  int candidate_count = std::min<int>(3, xyza_i_list.size());
+  for (int i = 0; i < candidate_count; i++) {
     const auto & xyza = xyza_i_list[i].first;
     Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
     auto angle_error = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3])) +
                        std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
 
-    if (std::abs(angle_error) < std::abs(min_angle_error)) {
+    if (angle_error < min_angle_error) {
       id = xyza_i_list[i].second;
       min_angle_error = angle_error;
     }
   }
 
-  if (id != 0) jumped = true;
+  if (matched_id != nullptr) *matched_id = id;
+  return min_angle_error;
+}
+
+void Target::canonicalize_four_armor_state(int * matched_id)
+{
+  if (!is_ground_four_armor() || ekf_.x.size() < 11 || ekf_.x[10] >= 0.0) return;
+
+  auto & x = ekf_.x;
+  x[4] += x[10];
+  x[6] = tools::limit_rad(x[6] + CV_PI / 2.0);
+  x[8] += x[9];
+  x[9] = -x[9];
+  x[10] = -x[10];
+
+  if (matched_id != nullptr && *matched_id >= 0) {
+    *matched_id = (*matched_id + 3) % 4;
+  }
+  if (last_id >= 0) {
+    last_id = (last_id + 3) % 4;
+  }
+}
+
+void Target::update(const Armor & armor)
+{
+  int id = -1;
+  match_armor_score(armor, &id);
+  if (id < 0) return;
+
+  const bool observed_jump = id != 0;
+
+  update_ypda(armor, id);
+  canonicalize_four_armor_state(&id);
+
+  if (observed_jump || id != 0) jumped = true;
 
   if (id != last_id) {
     is_switch_ = true;
@@ -180,8 +225,6 @@ void Target::update(const Armor & armor)
 
   last_id = id;
   update_count_++;
-
-  update_ypda(armor, id);
 }
 
 void Target::update_ypda(const Armor & armor, int id)

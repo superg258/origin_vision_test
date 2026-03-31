@@ -1,11 +1,15 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 
 #include "tasks/auto_aim/aimer.hpp"
+#include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -18,12 +22,14 @@
 const std::string keys =
   "{help h usage ? |                   | 输出命令行参数说明 }"
   "{config-path c  | configs/demo.yaml | yaml配置文件的路径}"
+  "{bullet-speed b | 0                 | 覆盖弹速，单位 m/s }"
   "{start-index s  | 0                 | 视频起始帧下标    }"
   "{end-index e    | 0                 | 视频结束帧下标    }"
   "{@input-path    | assets/demo/demo  | avi和txt文件的路径}";
 
 int main(int argc, char * argv[])
 {
+  const bool dump_json_stdout = std::getenv("OV_AUTO_AIM_TEST_STDOUT_JSON") != nullptr;
   // 读取命令行参数
   cv::CommandLineParser cli(argc, argv, keys);
   if (cli.has("help")) {
@@ -32,6 +38,7 @@ int main(int argc, char * argv[])
   }
   auto input_path = cli.get<std::string>(0);
   auto config_path = cli.get<std::string>("config-path");
+  auto bullet_speed = cli.get<double>("bullet-speed");
   auto start_index = cli.get<int>("start-index");
   auto end_index = cli.get<int>("end-index");
 
@@ -47,6 +54,7 @@ int main(int argc, char * argv[])
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
+  auto_aim::Shooter shooter(config_path);
 
   cv::Mat img, drawing;
   auto t0 = std::chrono::steady_clock::now();
@@ -82,12 +90,10 @@ int main(int argc, char * argv[])
     auto targets = tracker.track(armors, timestamp);
 
     auto aimer_start = std::chrono::steady_clock::now();
-    auto command = aimer.aim(targets, timestamp, 27, false);
-
-    if (
-      !targets.empty() && aimer.debug_aim_point.valid &&
-      std::abs(command.yaw - last_command.yaw) * 57.3 < 2)
-      command.shoot = true;
+    auto command = aimer.aim(targets, timestamp, bullet_speed, false);
+    Eigen::Quaterniond gimbal_q{w, x, y, z};
+    Eigen::Vector3d gimbal_ypr = tools::eulers(gimbal_q.toRotationMatrix(), 2, 1, 0);
+    command.shoot = shooter.shoot(command, aimer, targets, gimbal_ypr, tracker.state() == "tracking");
 
     if (command.control) last_command = command;
     /// 调试输出
@@ -106,7 +112,6 @@ int main(int argc, char * argv[])
         command.pitch * 57.3, command.shoot),
       {10, 60}, {154, 50, 205});
 
-    Eigen::Quaternion gimbal_q = {w, x, y, z};
     tools::draw_text(
       img,
       fmt::format(
@@ -114,6 +119,22 @@ int main(int argc, char * argv[])
       {10, 90}, {255, 255, 255});
 
     nlohmann::json data;
+    const auto & aim_solution = aimer.last_solution();
+    data["frame"] = frame_count;
+    data["t"] = t;
+    data["control"] = command.control;
+    data["target_present"] = !targets.empty();
+    data["aim_mode"] =
+      aim_solution.mode == auto_aim::AimMode::UpperCenterHold ? "upper_center_hold" : "direct_armor";
+    data["center_hold_active"] = aim_solution.mode == auto_aim::AimMode::UpperCenterHold;
+    data["impact_armor_id"] = aim_solution.impact_armor_id;
+    data["impact_time_error_ms"] =
+      std::isfinite(aim_solution.impact_time_error_s) ? aim_solution.impact_time_error_s * 1e3 : 0.0;
+    data["center_hold_ready"] =
+      aim_solution.valid && aim_solution.mode == auto_aim::AimMode::UpperCenterHold &&
+      std::abs(aim_solution.impact_time_error_s) <= aimer.center_hold_fire_window();
+    data["effective_bullet_speed"] = aimer.effective_bullet_speed();
+    data["center_yaw"] = aim_solution.center_yaw * 57.3;
 
     // 装甲板原始观测数据
     data["armor_num"] = armors.size();
@@ -127,10 +148,10 @@ int main(int argc, char * argv[])
       data["armor_center_y"] = armor.center_norm.y;
     }
 
-    Eigen::Quaternion q{w, x, y, z};
-    auto yaw = tools::eulers(q, 2, 1, 0)[0];
+    auto yaw = gimbal_ypr[0];
     data["gimbal_yaw"] = yaw * 57.3;
     data["cmd_yaw"] = command.yaw * 57.3;
+    data["cmd_pitch"] = command.pitch * 57.3;
     data["shoot"] = command.shoot;
 
     if (!targets.empty()) {
@@ -152,12 +173,17 @@ int main(int argc, char * argv[])
         tools::draw_points(img, image_points, {0, 255, 0});
       }
 
-      // aimer瞄准位置
-      auto aim_point = aimer.debug_aim_point;
-      Eigen::Vector4d aim_xyza = aim_point.xyza;
-      auto image_points =
-        solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-      if (aim_point.valid) tools::draw_points(img, image_points, {0, 0, 255});
+      if (aimer.debug_aim_point.valid) {
+        auto aim_points = solver.world2pixel(
+          {{static_cast<float>(aimer.debug_aim_point.xyza[0]),
+            static_cast<float>(aimer.debug_aim_point.xyza[1]),
+            static_cast<float>(aimer.debug_aim_point.xyza[2])}});
+        if (!aim_points.empty()) {
+          cv::Point aim_point{
+            cvRound(aim_points.front().x), cvRound(aim_points.front().y)};
+          tools::draw_point(img, aim_point, {0, 0, 255}, 5);
+        }
+      }
 
       // 观测器内部数据
       Eigen::VectorXd x = target.ekf_x();
@@ -187,6 +213,9 @@ int main(int argc, char * argv[])
     }
 
     plotter.plot(data);
+    if (dump_json_stdout) {
+      std::cout << data.dump() << '\n';
+    }
 
     cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
     cv::imshow("reprojection", img);

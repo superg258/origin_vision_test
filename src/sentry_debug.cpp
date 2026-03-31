@@ -137,15 +137,17 @@ int main(int argc, char * argv[])
         tools::draw_points(img, image_points, {0, 255, 0});
       }
 
-      // aimer瞄准位置
-      auto aim_point = aimer.debug_aim_point;
-      Eigen::Vector4d aim_xyza = aim_point.xyza;
-      auto image_points =
-        solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-      if (aim_point.valid)
-        tools::draw_points(img, image_points, {0, 0, 255});
-      else
-        tools::draw_points(img, image_points, {255, 0, 0});
+      if (aimer.debug_aim_point.valid) {
+        auto aim_points = solver.world2pixel(
+          {{static_cast<float>(aimer.debug_aim_point.xyza[0]),
+            static_cast<float>(aimer.debug_aim_point.xyza[1]),
+            static_cast<float>(aimer.debug_aim_point.xyza[2])}});
+        if (!aim_points.empty()) {
+          cv::Point aim_point{
+            cvRound(aim_points.front().x), cvRound(aim_points.front().y)};
+          tools::draw_point(img, aim_point, {0, 0, 255}, 5);
+        }
+      }
 
       // 观测器内部数据
       Eigen::VectorXd x = target.ekf_x();

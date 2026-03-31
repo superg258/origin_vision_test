@@ -88,7 +88,7 @@ private:
   double pitch_ = 0.0;
   double yaw_vel_ = 0.0;
   double pitch_vel_ = 0.0;
-  double bullet_speed_ = 23.0;
+  double bullet_speed_ = 0.0;
   double big_yaw_ = 0.0;
 
   BridgeConfig bridge_config_;

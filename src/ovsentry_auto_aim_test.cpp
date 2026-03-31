@@ -1,6 +1,7 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 
@@ -113,7 +114,19 @@ int main(int argc, char * argv[])
       {0, 255, 255});
 
     nlohmann::json data;
+    const auto & aim_solution = aimer.last_solution();
     data["armor_num"] = armors.size();
+    data["aim_mode"] =
+      aim_solution.mode == auto_aim::AimMode::UpperCenterHold ? "upper_center_hold" : "direct_armor";
+    data["center_hold_active"] = aim_solution.mode == auto_aim::AimMode::UpperCenterHold;
+    data["impact_armor_id"] = aim_solution.impact_armor_id;
+    data["impact_time_error_ms"] =
+      std::isfinite(aim_solution.impact_time_error_s) ? aim_solution.impact_time_error_s * 1e3 : 0.0;
+    data["center_hold_ready"] =
+      aim_solution.valid && aim_solution.mode == auto_aim::AimMode::UpperCenterHold &&
+      std::abs(aim_solution.impact_time_error_s) <= aimer.center_hold_fire_window();
+    data["effective_bullet_speed"] = aimer.effective_bullet_speed();
+    data["center_yaw"] = aim_solution.center_yaw * 57.3;
     if (!armors.empty()) {
       auto min_x = 1e10;
       auto & armor = armors.front();
@@ -139,14 +152,17 @@ int main(int argc, char * argv[])
         tools::draw_points(img, image_points, {0, 255, 0});
       }
 
-      auto aim_point = aimer.debug_aim_point;
-      Eigen::Vector4d aim_xyza = aim_point.xyza;
-      auto image_points =
-        solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-      if (aim_point.valid)
-        tools::draw_points(img, image_points, {0, 0, 255});
-      else
-        tools::draw_points(img, image_points, {255, 0, 0});
+      if (aimer.debug_aim_point.valid) {
+        auto aim_points = solver.world2pixel(
+          {{static_cast<float>(aimer.debug_aim_point.xyza[0]),
+            static_cast<float>(aimer.debug_aim_point.xyza[1]),
+            static_cast<float>(aimer.debug_aim_point.xyza[2])}});
+        if (!aim_points.empty()) {
+          cv::Point aim_point{
+            cvRound(aim_points.front().x), cvRound(aim_points.front().y)};
+          tools::draw_point(img, aim_point, {0, 0, 255}, 5);
+        }
+      }
 
       Eigen::VectorXd x = target.ekf_x();
       data["x"] = x[0];
