@@ -13,3 +13,5 @@ testvideos/
 watchdog.sh
 records_24/
 records_25/
+tests/local/
+tests/ovsentry_omni_regression_test.cpp

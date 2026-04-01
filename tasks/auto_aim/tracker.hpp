@@ -4,6 +4,7 @@
 #include <Eigen/Dense>
 #include <chrono>
 #include <list>
+#include <optional>
 #include <string>
 
 #include "armor.hpp"
@@ -14,6 +15,20 @@
 
 namespace auto_aim
 {
+struct OmniSwitchConstraint
+{
+  bool enabled = false;
+  ArmorName armor_name = ArmorName::not_armor;
+  ArmorPriority priority = ArmorPriority::fifth;
+  double abs_yaw_rad = 0.0;
+  bool has_abs_yaw = false;
+  double match_deg = 0.0;
+};
+
+std::optional<double> omni_switch_match_delta_deg(
+  ArmorName armor_name, ArmorPriority priority, const Eigen::Vector3d & xyz_in_world,
+  const OmniSwitchConstraint & constraint);
+
 class Tracker
 {
 public:
@@ -27,7 +42,8 @@ public:
 
   std::tuple<omniperception::DetectionResult, std::list<Target>> track(
     const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
-    std::chrono::steady_clock::time_point t, bool use_enemy_color = true);
+    std::chrono::steady_clock::time_point t, bool use_enemy_color = true,
+    const std::optional<OmniSwitchConstraint> & switch_constraint = std::nullopt);
 
 private:
   Solver & solver_;

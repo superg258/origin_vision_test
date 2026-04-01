@@ -17,6 +17,23 @@
 
 namespace omniperception
 {
+struct SelectionContext
+{
+  double reference_abs_yaw_rad = 0.0;
+  bool has_reference_abs_yaw = false;
+  double current_abs_yaw_rad = 0.0;
+  bool has_current_abs_yaw = false;
+  OmniCameraSlot preferred_slot = OmniCameraSlot::unknown;
+  std::chrono::steady_clock::time_point now_timestamp{};
+  double stale_ms = 0.0;
+  double max_base_yaw_delta_deg = 0.0;
+};
+
+void sort_for_ovsentry_omni(
+  std::vector<DetectionResult> & detection_queue, const SelectionContext & context,
+  auto_aim::Color enemy_color, int mode,
+  const std::vector<auto_aim::ArmorName> & invincible_armor = {});
+
 class Decider
 {
 public:
@@ -41,6 +58,8 @@ public:
   void set_priority(std::list<auto_aim::Armor> & armors);
   //对队列中的每一个DetectionResult进行过滤，同时将DetectionResult排序
   void sort(std::vector<DetectionResult> & detection_queue);
+  void sort_for_ovsentry_omni(
+    std::vector<DetectionResult> & detection_queue, const SelectionContext & context);
 
   Eigen::Vector4d get_target_info(
     const std::list<auto_aim::Armor> & armors, const std::list<auto_aim::Target> & targets);

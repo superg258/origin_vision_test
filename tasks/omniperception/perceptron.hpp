@@ -44,7 +44,9 @@ public:
     double delta_pitch_deg = 0.0;
     double infer_ms = 0.0;
     double base_yaw_rad = 0.0;
+    double abs_yaw_rad = 0.0;
     bool has_base_yaw = false;
+    bool has_abs_yaw = false;
     bool has_detection = false;
     bool camera_online = false;
     int consecutive_timeout_count = 0;

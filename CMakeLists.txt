@@ -121,6 +121,8 @@ target_link_libraries(planner_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim too
 add_executable(planner_test_offline tests/planner_test_offline.cpp)
 target_link_libraries(planner_test_offline ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/local/local_tests.cmake OPTIONAL)
+
 # 只有在 io 子目录成功生成对应的可选 ROS2 库时，才编译相关入口。
 if(TARGET io_ros2_nav)
     add_executable(sentry src/sentry.cpp)

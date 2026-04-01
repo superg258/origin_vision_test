@@ -109,7 +109,8 @@ void Perceptron::parallel_infer(
   auto update_snapshot = [&](const cv::Mat & image, std::chrono::steady_clock::time_point timestamp,
                              const std::optional<auto_aim::Armor> & top_armor, double delta_yaw_deg,
                              double delta_pitch_deg, double infer_ms, double base_yaw_rad,
-                             bool has_detection, bool camera_online, int timeout_count) {
+                             double abs_yaw_rad, bool has_base_yaw, bool has_abs_yaw, bool has_detection,
+                             bool camera_online, int timeout_count) {
       std::lock_guard<std::mutex> lock(mutex_);
       auto it = std::find_if(
         worker_configs_.begin(), worker_configs_.end(),
@@ -130,7 +131,9 @@ void Perceptron::parallel_infer(
       snapshot.delta_pitch_deg = delta_pitch_deg;
       snapshot.infer_ms = infer_ms;
       snapshot.base_yaw_rad = base_yaw_rad;
-      snapshot.has_base_yaw = static_cast<bool>(worker.base_yaw_provider);
+      snapshot.abs_yaw_rad = abs_yaw_rad;
+      snapshot.has_base_yaw = has_base_yaw;
+      snapshot.has_abs_yaw = has_abs_yaw;
       snapshot.has_detection = has_detection;
       snapshot.camera_online = camera_online;
       snapshot.consecutive_timeout_count = timeout_count;
@@ -146,32 +149,35 @@ void Perceptron::parallel_infer(
       if (stop_flag_) break;  // 检查是否需要退出
     }
 
-    const double base_yaw_rad = worker.base_yaw_provider ? worker.base_yaw_provider() : 0.0;
     bool frame_ready = false;
     try {
       frame_ready = cam->read_with_timeout(usb_img, ts, read_timeout_);
     } catch (const std::exception & e) {
       consecutive_timeout_count++;
+      const double base_yaw_rad = worker.base_yaw_provider ? worker.base_yaw_provider() : 0.0;
       tools::logger()->warn(
         "[Perceptron:{}] read exception: {}", worker.camera_label.empty() ? cam->device_name : worker.camera_label,
         e.what());
-      update_snapshot(
-        {}, std::chrono::steady_clock::now(), std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, false, false,
-        consecutive_timeout_count);
+      update_snapshot({}, std::chrono::steady_clock::now(), std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad,
+                      0.0, static_cast<bool>(worker.base_yaw_provider), false, false, false,
+                      consecutive_timeout_count);
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       continue;
     }
 
     if (!frame_ready || usb_img.empty()) {
       consecutive_timeout_count++;
-      update_snapshot(
-        {}, std::chrono::steady_clock::now(), std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, false, false,
-        consecutive_timeout_count);
+      const double base_yaw_rad = worker.base_yaw_provider ? worker.base_yaw_provider() : 0.0;
+      update_snapshot({}, std::chrono::steady_clock::now(), std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad,
+                      0.0, static_cast<bool>(worker.base_yaw_provider), false, false, false,
+                      consecutive_timeout_count);
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       continue;
     }
 
     consecutive_timeout_count = 0;
+    const double base_yaw_rad = worker.base_yaw_provider ? worker.base_yaw_provider() : 0.0;
+    const bool has_base_yaw = static_cast<bool>(worker.base_yaw_provider);
 
     try {
       const auto infer_begin = std::chrono::steady_clock::now();
@@ -208,20 +214,26 @@ void Perceptron::parallel_infer(
         dr.slot = worker.camera_spec.has_value() ? worker.camera_spec->slot : OmniCameraSlot::unknown;
         dr.camera_label = worker.camera_spec.has_value() ? worker.camera_spec->label : worker.camera_label;
         dr.base_yaw_rad = base_yaw_rad;
-        dr.has_base_yaw = static_cast<bool>(worker.base_yaw_provider);
+        dr.has_base_yaw = has_base_yaw;
+        if (dr.has_base_yaw) {
+          dr.abs_yaw_rad = dr.base_yaw_rad + dr.delta_yaw;
+          dr.has_abs_yaw = true;
+        }
         dr.infer_ms = infer_ms;
         detection_queue_.push(dr);  // 推入线程安全队列
       }
 
-      update_snapshot(
-        usb_img, ts, top_armor, delta_yaw_deg, delta_pitch_deg, infer_ms, base_yaw_rad,
-        top_armor.has_value(), true, consecutive_timeout_count);
+      const double abs_yaw_rad =
+        (has_base_yaw && top_armor.has_value()) ? (base_yaw_rad + delta_yaw_deg / 57.3) : 0.0;
+      update_snapshot(usb_img, ts, top_armor, delta_yaw_deg, delta_pitch_deg, infer_ms, base_yaw_rad,
+                      abs_yaw_rad, has_base_yaw, has_base_yaw && top_armor.has_value(),
+                      top_armor.has_value(), true, consecutive_timeout_count);
     } catch (const std::exception & e) {
       tools::logger()->warn(
         "[Perceptron:{}] infer exception: {}",
         worker.camera_label.empty() ? cam->device_name : worker.camera_label, e.what());
-      update_snapshot(
-        usb_img, ts, std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, false, true, consecutive_timeout_count);
+      update_snapshot(usb_img, ts, std::nullopt, 0.0, 0.0, 0.0, base_yaw_rad, 0.0, has_base_yaw,
+                      false, false, true, consecutive_timeout_count);
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }

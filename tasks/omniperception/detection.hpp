@@ -35,10 +35,12 @@ struct DetectionResult
   std::chrono::steady_clock::time_point timestamp{};
   double delta_yaw = 0.0;    //rad
   double delta_pitch = 0.0;  //rad
+  double abs_yaw_rad = 0.0;
   OmniCameraSlot slot = OmniCameraSlot::unknown;
   std::string camera_label;
   double base_yaw_rad = 0.0;
   bool has_base_yaw = false;
+  bool has_abs_yaw = false;
   double infer_ms = 0.0;
 };
 }  // namespace omniperception

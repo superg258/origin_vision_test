@@ -110,6 +110,11 @@ mode: 1
 omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
 omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
 omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换
+ovsentry_omni_retarget_cooldown_s: 2.5 # ovsentry_omni 专用大幅重定向CD
+ovsentry_omni_retarget_min_delta_deg: 20.0 # ovsentry_omni 仅将跨slot/换目标的大角度变化视作重定向
+ovsentry_omni_detection_stale_ms: 60.0 # ovsentry_omni 专用时效窗口，近距离目标优先丢弃旧检测
+ovsentry_omni_detection_max_base_yaw_delta_deg: 8.0 # 检测使用的base_yaw与当前big_yaw偏差超过该值时丢弃
+ovsentry_omni_switch_target_match_deg: 10.0 # switching时主相机候选和handoff目标的最大角差
 
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

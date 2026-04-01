@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
 #include <tuple>
 
 #include "tools/logger.hpp"
@@ -9,6 +10,16 @@
 
 namespace auto_aim
 {
+std::optional<double> omni_switch_match_delta_deg(
+  ArmorName armor_name, ArmorPriority priority, const Eigen::Vector3d & xyz_in_world,
+  const OmniSwitchConstraint & constraint)
+{
+  if (!constraint.enabled || !constraint.has_abs_yaw) return std::nullopt;
+  if (armor_name != constraint.armor_name || priority != constraint.priority) return std::nullopt;
+  const double armor_abs_yaw = std::atan2(xyz_in_world[1], xyz_in_world[0]);
+  return std::abs(tools::limit_rad(armor_abs_yaw - constraint.abs_yaw_rad)) * 57.3;
+}
+
 Tracker::Tracker(const std::string & config_path, Solver & solver)
 : solver_{solver},
   detect_count_(0),
@@ -97,7 +108,8 @@ std::list<Target> Tracker::track(
 
 std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
-  std::chrono::steady_clock::time_point t, bool use_enemy_color)
+  std::chrono::steady_clock::time_point t, bool use_enemy_color,
+  const std::optional<OmniSwitchConstraint> & switch_constraint)
 {
   omniperception::DetectionResult switch_target;
   switch_target.timestamp = t;
@@ -151,7 +163,23 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   }
 
   else if (state_ == "switching") {
-    found = !armors.empty() && armors.front().priority == omni_target_priority_;
+    if (switch_constraint.has_value() && switch_constraint->enabled && switch_constraint->has_abs_yaw) {
+      found = false;
+      for (auto armor : armors) {
+        if (armor.name != switch_constraint->armor_name || armor.priority != switch_constraint->priority) {
+          continue;
+        }
+        solver_.solve(armor);
+        const auto delta_deg = omni_switch_match_delta_deg(
+          armor.name, armor.priority, armor.xyz_in_world, switch_constraint.value());
+        if (delta_deg.has_value() && delta_deg.value() <= switch_constraint->match_deg) {
+          found = true;
+          break;
+        }
+      }
+    } else {
+      found = !armors.empty() && armors.front().priority == omni_target_priority_;
+    }
   }
 
   else if (state_ == "detecting" && pre_state_ == "switching") {
