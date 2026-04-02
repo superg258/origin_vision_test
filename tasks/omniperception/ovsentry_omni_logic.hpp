@@ -44,14 +44,21 @@ struct OmniRetargetDecision
   std::string block_reason = "none";
 };
 
+std::optional<AcceptedOmniTarget> select_omni_retarget_reference_target(
+  const std::optional<AcceptedOmniTarget> & session_target,
+  const std::optional<AcceptedOmniTarget> & cooldown_anchor_target, bool cooldown_active);
+
 std::optional<OmniCandidate> select_omni_candidate(
   const std::vector<OmniCandidate> & candidates,
-  const std::optional<AcceptedOmniTarget> & accepted_target, double current_abs_yaw_rad,
+  const std::optional<AcceptedOmniTarget> & reference_target, double current_abs_yaw_rad,
   double retarget_min_delta_deg);
 
 OmniRetargetDecision evaluate_omni_retarget(
-  const OmniCandidate & candidate, const std::optional<AcceptedOmniTarget> & last_target,
-  bool cooldown_active, double retarget_min_delta_deg);
+  const OmniCandidate & candidate, const std::optional<AcceptedOmniTarget> & reference_target,
+  double current_abs_yaw_rad, bool cooldown_active, double retarget_min_delta_deg);
+
+bool should_start_omni_retarget_cooldown(
+  const OmniRetargetDecision & decision, double retarget_min_delta_deg);
 
 }  // namespace omniperception
 
