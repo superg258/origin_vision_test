@@ -18,11 +18,19 @@
 #include "tools/plotter.hpp"
 #include "tools/recorder.hpp"
 
+#ifndef OVGIMBAL_MAIN_NAME
+#define OVGIMBAL_MAIN_NAME main
+#endif
+
+#ifndef OVGIMBAL_FORCE_HEADLESS
+#define OVGIMBAL_FORCE_HEADLESS 0
+#endif
+
 const std::string keys =
   "{help h usage ? |                           | 输出命令行参数说明}"
   "{@config-path   | configs/standard4.yaml   | 位置参数，yaml配置文件路径 }";
 
-int main(int argc, char * argv[])
+int OVGIMBAL_MAIN_NAME(int argc, char * argv[])
 {
   cv::CommandLineParser cli(argc, argv, keys);
   auto config_path = cli.get<std::string>(0);
@@ -32,7 +40,9 @@ int main(int argc, char * argv[])
   }
 
   tools::Exiter exiter;
+#if !OVGIMBAL_FORCE_HEADLESS
   tools::Plotter plotter;
+#endif
   tools::Recorder recorder;
 
   io::OVGimbal gimbal(config_path);
@@ -72,9 +82,11 @@ int main(int argc, char * argv[])
     recorder.record(img, q, timestamp);
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+#if !OVGIMBAL_FORCE_HEADLESS
     double roll = ypr[2] * 57.3;
     double pitch = ypr[1] * 57.3;
     double yaw = ypr[0] * 57.3;
+#endif
 
     auto yolo_start = std::chrono::steady_clock::now();
     auto armors = yolo.detect(img, frame_count);
@@ -91,6 +103,7 @@ int main(int argc, char * argv[])
     command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker.state() == "tracking");
     gimbal.send(command);
 
+#if !OVGIMBAL_FORCE_HEADLESS
     double yolo_time = tools::delta_time(yolo_end, yolo_start) * 1e3;
     double tracker_time = tools::delta_time(tracker_end, tracker_start) * 1e3;
     double aimer_time = tools::delta_time(aimer_end, aimer_start) * 1e3;
@@ -182,6 +195,7 @@ int main(int argc, char * argv[])
     cv::imshow("OVGimbal Auto Aim Test", img);
     auto key = cv::waitKey(30);
     if (key == 'q') break;
+#endif
   }
 
   return 0;
