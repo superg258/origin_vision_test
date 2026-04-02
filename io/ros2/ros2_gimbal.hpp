@@ -34,6 +34,7 @@ public:
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
   Eigen::Quaterniond imu_at_image(std::chrono::steady_clock::time_point image_timestamp);
+  double big_yaw_at_image(std::chrono::steady_clock::time_point image_timestamp);
   double offset_ms() const;
 
   void send(const io::Command & command);
@@ -48,6 +49,7 @@ private:
   {
     Eigen::Quaterniond q;
     std::chrono::steady_clock::time_point timestamp;
+    double big_yaw_rad = 0.0;
   };
 
   struct BridgeConfig
@@ -64,6 +66,8 @@ private:
   void status_callback(const std::shared_ptr<rclcpp::SerializedMessage> & message);
   bool prime_queue_if_ready();
   Eigen::Quaterniond latest_q() const;
+  double latest_big_yaw() const;
+  double big_yaw_at(std::chrono::steady_clock::time_point timestamp);
 
   tools::ThreadSafeQueue<IMUData> queue_{1000};
   std::shared_ptr<rclcpp::Node> node_;

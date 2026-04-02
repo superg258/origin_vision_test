@@ -14,6 +14,7 @@
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/yaml.hpp"
+#include "ros2_gimbal_internal.hpp"
 
 namespace io
 {
@@ -272,7 +273,7 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
     }
 
     const auto now = std::chrono::steady_clock::now();
-    queue_.push({q, now});
+    queue_.push({q, now, deg2rad(big_yaw_deg)});
     sample_count_.fetch_add(1);
 
     {
@@ -329,6 +330,12 @@ Eigen::Quaterniond ROS2Gimbal::latest_q() const
   return latest_q_;
 }
 
+double ROS2Gimbal::latest_big_yaw() const
+{
+  std::lock_guard<std::mutex> lk(mtx_);
+  return big_yaw_;
+}
+
 Eigen::Quaterniond ROS2Gimbal::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
   if (!prime_queue_if_ready()) return latest_q();
@@ -362,6 +369,27 @@ Eigen::Quaterniond ROS2Gimbal::imu_at(std::chrono::steady_clock::time_point time
 Eigen::Quaterniond ROS2Gimbal::imu_at_image(std::chrono::steady_clock::time_point image_timestamp)
 {
   return imu_at(image_timestamp + imu_query_offset_);
+}
+
+double ROS2Gimbal::big_yaw_at(std::chrono::steady_clock::time_point timestamp)
+{
+  if (!prime_queue_if_ready()) return latest_big_yaw();
+
+  auto pop_next = [this]() -> std::optional<IMUData> {
+      IMUData next;
+      if (!queue_.pop_for(next, std::chrono::milliseconds(0))) {
+        return std::nullopt;
+      }
+      return next;
+    };
+
+  return detail::lookup_big_yaw_rad(
+    timestamp, has_prev_, data_prev_, data_ahead_, data_behind_, pop_next);
+}
+
+double ROS2Gimbal::big_yaw_at_image(std::chrono::steady_clock::time_point image_timestamp)
+{
+  return big_yaw_at(image_timestamp + imu_query_offset_);
 }
 
 double ROS2Gimbal::offset_ms() const
