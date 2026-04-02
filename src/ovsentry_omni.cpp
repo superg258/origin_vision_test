@@ -31,6 +31,14 @@
 #include "tools/recorder.hpp"
 #include "tools/yaml.hpp"
 
+#ifndef OVSENTRY_MAIN_NAME
+#define OVSENTRY_MAIN_NAME main
+#endif
+
+#ifndef OVSENTRY_FORCE_NO_DISPLAY
+#define OVSENTRY_FORCE_NO_DISPLAY 0
+#endif
+
 namespace
 {
 struct OmniCamConfig
@@ -240,7 +248,7 @@ const std::string keys =
   "{fov_v          | 67                      | USB相机垂直视场角(deg) }"
   "{no-display     |                         | 关闭画面显示 }";
 
-int main(int argc, char * argv[])
+int OVSENTRY_MAIN_NAME(int argc, char * argv[])
 {
   cv::CommandLineParser cli(argc, argv, keys);
   auto config_path = cli.get<std::string>(0);
@@ -314,7 +322,7 @@ int main(int argc, char * argv[])
   tools::Exiter exiter;
   tools::Plotter plotter;
   tools::Recorder recorder;
-  const bool display = !cli.has("no-display");
+  const bool display = OVSENTRY_FORCE_NO_DISPLAY ? false : !cli.has("no-display");
   constexpr bool aimer_to_now = true;
 
   std::unique_ptr<io::ROS2Gimbal> gimbal;
