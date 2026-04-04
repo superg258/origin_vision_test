@@ -23,7 +23,8 @@ struct AimPoint
 enum class AimMode
 {
   DirectArmor = 0,
-  UpperCenterHold = 1,
+  IndirectArmor = 1,
+  CenterHold = 2,
 };
 
 struct AimSolution
@@ -37,6 +38,16 @@ struct AimSolution
   double center_yaw = 0.0;
   int impact_armor_id = -1;
   double impact_time_error_s = std::numeric_limits<double>::infinity();
+  double total_horizon_s = 0.0;
+  double translate_disp_m = 0.0;
+  double rotate_adv_rad = 0.0;
+  int selected_plate_id = -1;
+  int adjacent_plate_id = -1;
+  double continuity_confidence = 0.0;
+  double same_plate_confidence = 0.0;
+  double predicted_miss_m = std::numeric_limits<double>::infinity();
+  double time_to_window_s = std::numeric_limits<double>::infinity();
+  double armor_width_m = 0.0;
 };
 
 class Aimer
@@ -71,22 +82,59 @@ private:
   double low_speed_threshold_enter_;
   double low_speed_threshold_exit_;
   bool center_hold_enabled_ = false;
+  bool indirect_enable_ = true;
   double center_hold_fire_window_ = 0.015;
   double center_hold_min_height_delta_ = 0.02;
+  double indirect_max_wait_s_ = 0.12;
+  double continuity_max_age_s_ = 0.18;
+  double direct_translate_limit_scale_ = 1.5;
+  double center_hold_enter_phase_rad_ = 0.65;
+  double center_hold_exit_phase_rad_ = 0.45;
+  double max_predicted_miss_scale_ = 0.35;
   double bullet_speed_fallback_ = 23.0;
-  bool upper_center_hold_mode_ = false;
+  bool high_speed_delay_mode_ = false;
+  bool center_hold_mode_ = false;
+  struct ArmorContinuityLite
+  {
+    bool valid = false;
+    int selected_plate_id = -1;
+    int adjacent_plate_id = -1;
+    std::chrono::steady_clock::time_point last_seen_time{};
+    double continuity_confidence = 0.0;
+  } continuity_;
   AimSolution last_solution_;
   double last_effective_bullet_speed_ = 0.0;
+  std::chrono::steady_clock::time_point current_eval_timestamp_{};
+  double current_predict_delay_s_ = 0.0;
+  double current_fly_time_s_ = 0.0;
 
   double resolve_bullet_speed(double bullet_speed) const;
   bool is_ground_four_armor_target(const Target & target) const;
-  bool should_use_upper_center_hold(const Target & target);
   AimPoint choose_aim_point(const Target & target);
-  AimSolution choose_aim_solution(const Target & target);
-  AimSolution make_direct_solution(
-    const Target & target, const AimPoint & aim_point, int impact_armor_id = -1) const;
+  AimSolution choose_aim_solution(
+    const Target & target, std::chrono::steady_clock::time_point timestamp);
+  AimSolution choose_ground_four_armor_solution(
+    const Target & target, std::chrono::steady_clock::time_point timestamp);
+  AimSolution make_plate_solution(
+    const Target & target, AimMode mode, const Eigen::Vector4d & command_xyza,
+    const Eigen::Vector4d & impact_armor_xyza, int impact_armor_id, int adjacent_plate_id,
+    double time_to_window_s, double total_horizon_s, double same_plate_confidence,
+    double continuity_confidence) const;
   AimSolution make_visible_direct_solution(const Target & target);
-  AimSolution make_upper_center_hold_solution(const Target & target) const;
+  AimSolution make_center_hold_solution(
+    const Target & target, double total_horizon_s, double same_plate_confidence,
+    double continuity_confidence) const;
+  void finalize_solution_metrics(
+    AimSolution & solution, const Target & target, double total_horizon_s,
+    double same_plate_confidence, double continuity_confidence) const;
+  double armor_width_m(const Target & target) const;
+  double predicted_miss_m(
+    const Eigen::Vector4d & impact_armor_xyza, const Eigen::VectorXd & x,
+    double total_horizon_s) const;
+  void prune_continuity(std::chrono::steady_clock::time_point timestamp);
+  double continuity_confidence(std::chrono::steady_clock::time_point timestamp) const;
+  void update_continuity(
+    const AimSolution & solution, std::chrono::steady_clock::time_point timestamp);
   static AimPoint to_aim_point(const AimSolution & solution);
 };
 

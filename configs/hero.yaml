@@ -1,5 +1,5 @@
-# enemy_color: "red"
-enemy_color: "blue"
+enemy_color: "red"
+#enemy_color: "blue"
 
 #####-----感知与模型参数-----#####
 yolo_name: yolov5
@@ -34,21 +34,28 @@ max_temp_lost_count: 15
 outpost_max_temp_lost_count: 75
 
 #####-----瞄准参数-----#####
-yaw_offset: 0 # degree
-pitch_offset: 0 # degree
+yaw_offset: -1 # degree
+pitch_offset: 1.3 # degree
 comming_angle: 60 # degree
-leaving_angle: 20 # degree
-resistance_k: 0.023 # 空气阻力系数
+leaving_angle: 20 # degreeleaving_angle
+resistance_k: 0.1 # 空气阻力系数
 decision_speed: 3.8 # rad/s
-decision_speed_enter: 3.8 # rad/s
-decision_speed_exit: 3.0 # rad/s
-low_speed_threshold: 2.8 # rad/s
-low_speed_threshold_exit: 3.4 # rad/s
-high_speed_delay_time: 0.015 # s
-low_speed_delay_time: 0.015 # s
+decision_speed_enter: 4 # rad/s
+decision_speed_exit: 1 # rad/s
+low_speed_threshold: 0 # rad/s
+low_speed_threshold_exit: 3 # rad/s
+high_speed_delay_time: 0.22 # s
+low_speed_delay_time: 0.2 # s
 center_hold_enabled: true
-center_hold_fire_window: 0.015 # s
-center_hold_min_height_delta: 0.02 # m
+indirect_enable: true
+indirect_max_wait_s: 0.12 # s
+continuity_max_age_s: 0.18 # s
+direct_translate_limit_scale: 1.5
+center_hold_enter_phase_rad: 0.65 # rad
+center_hold_exit_phase_rad: 0.45 # rad
+center_hold_fire_window: 0.01 # s，自适应窗口上限
+center_hold_min_height_delta: 0.01 # m
+max_predicted_miss_scale: 0.35
 bullet_speed_fallback: 11.7 # m/s, 实时弹速无效时回退
 
 #####-----射击参数-----#####
@@ -56,6 +63,7 @@ first_tolerance: 3 # degree
 second_tolerance: 2 # degree
 judge_distance: 2
 auto_fire: true
+fire_window_scale: 0.8
 high_spin_force_fire_enabled: false
 high_spin_force_fire_enter_speed: 12.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
@@ -67,20 +75,19 @@ timing:
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
 exposure_ms: 2
-gain: 16
+gain: 10
 vid_pid: "2bdf:0001"
 
-#####-----标定参数-----#####
-R_gimbal2imubody: [1, 0, 0, 0, 1, 0,  0, 0, 1]
+R_gimbal2imubody: [0, -1, 0, 1, 0, 0, 0, 0, 1]
+# 重投影误差: 0.1263px
+camera_matrix: [1821.8098847176259, 0, 734.87743289451271, 0, 1820.6566324428659, 549.34673017767579, 0, 0, 1]
+distort_coeffs: [-0.073990069810710379, 0.20829235332975143, 0.00020022162924425625, -0.00027688262675909021, 0]
 
-# 重投影误差: 0.2460px
-camera_matrix: [1797.5969210084497, 0, 704.29881863698699, 0, 1797.7867973769753, 537.02448196123203, 0, 0, 1]
-distort_coeffs: [-0.087666128664286636, 0.22065090602894918, -0.00012832454592968064, 0.00058739756422585129, 0]
-
-# 相机同理想情况的偏角: yaw-1.95 pitch-1.85 roll0.00 degree
-R_camera2gimbal: [ -0.008726535498, 0.017451741903, 0.999809624020, -0.999961923064, -0.000152299044, -0.008725206405, 0.000000000000, -0.999847695156, 0.017452406437 ]
-t_camera2gimbal: [0.092317072966267857, -0.0037162449022158732, 0.08695273622026739]
-
+# 相机同理想情况的偏角: yaw-0.81 pitch-7.90 roll0.93 degree
+R_camera2gimbal: [0.014136696038032736, -0.1374308114675208  ,  0.9904104835291814  ,
+-0.9999000719197535  , -0.001943011769412539,  0.014002531204594932,
+0.                  , -0.9905094632383088  , -0.13744454603714665]
+t_camera2gimbal: [0.14148643863203164, -0.00010576899333865009, 0.069536243984211155]
 #####-----规划参数-----#####
 fire_thresh: 0.03
 max_yaw_acc: 200

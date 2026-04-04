@@ -116,17 +116,33 @@ int main(int argc, char * argv[])
     nlohmann::json data;
     const auto & aim_solution = aimer.last_solution();
     data["armor_num"] = armors.size();
-    data["aim_mode"] =
-      aim_solution.mode == auto_aim::AimMode::UpperCenterHold ? "upper_center_hold" : "direct_armor";
-    data["center_hold_active"] = aim_solution.mode == auto_aim::AimMode::UpperCenterHold;
+    if (aim_solution.mode == auto_aim::AimMode::IndirectArmor) {
+      data["aim_mode"] = "indirect_armor";
+    } else if (aim_solution.mode == auto_aim::AimMode::CenterHold) {
+      data["aim_mode"] = "center_hold";
+    } else {
+      data["aim_mode"] = "direct_armor";
+    }
+    data["center_hold_active"] = aim_solution.mode == auto_aim::AimMode::CenterHold;
     data["impact_armor_id"] = aim_solution.impact_armor_id;
     data["impact_time_error_ms"] =
       std::isfinite(aim_solution.impact_time_error_s) ? aim_solution.impact_time_error_s * 1e3 : 0.0;
     data["center_hold_ready"] =
-      aim_solution.valid && aim_solution.mode == auto_aim::AimMode::UpperCenterHold &&
+      aim_solution.valid && aim_solution.mode == auto_aim::AimMode::CenterHold &&
       std::abs(aim_solution.impact_time_error_s) <= aimer.center_hold_fire_window();
     data["effective_bullet_speed"] = aimer.effective_bullet_speed();
     data["center_yaw"] = aim_solution.center_yaw * 57.3;
+    data["total_horizon_s"] = aim_solution.total_horizon_s;
+    data["translate_disp_m"] = aim_solution.translate_disp_m;
+    data["rotate_adv_rad"] = aim_solution.rotate_adv_rad;
+    data["selected_plate_id"] = aim_solution.selected_plate_id;
+    data["adjacent_plate_id"] = aim_solution.adjacent_plate_id;
+    data["continuity_confidence"] = aim_solution.continuity_confidence;
+    data["same_plate_confidence"] = aim_solution.same_plate_confidence;
+    data["predicted_miss_m"] =
+      std::isfinite(aim_solution.predicted_miss_m) ? aim_solution.predicted_miss_m : 0.0;
+    data["time_to_window_s"] =
+      std::isfinite(aim_solution.time_to_window_s) ? aim_solution.time_to_window_s : 0.0;
     if (!armors.empty()) {
       auto min_x = 1e10;
       auto & armor = armors.front();

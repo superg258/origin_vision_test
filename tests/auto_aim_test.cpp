@@ -91,8 +91,7 @@ int main(int argc, char * argv[])
 
     auto aimer_start = std::chrono::steady_clock::now();
     auto command = aimer.aim(targets, timestamp, bullet_speed, false);
-    Eigen::Quaterniond gimbal_q{w, x, y, z};
-    Eigen::Vector3d gimbal_ypr = tools::eulers(gimbal_q.toRotationMatrix(), 2, 1, 0);
+    Eigen::Vector3d gimbal_ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
     command.shoot = shooter.shoot(command, aimer, targets, gimbal_ypr, tracker.state() == "tracking");
 
     if (command.control) last_command = command;
@@ -112,11 +111,12 @@ int main(int argc, char * argv[])
         command.pitch * 57.3, command.shoot),
       {10, 60}, {154, 50, 205});
 
+    const double gimbal_roll = gimbal_ypr[2] * 57.3;
+    const double gimbal_pitch = gimbal_ypr[1] * 57.3;
+    const double gimbal_yaw = gimbal_ypr[0] * 57.3;
+
     tools::draw_text(
-      img,
-      fmt::format(
-        "gimbal yaw{:.2f}", (tools::eulers(gimbal_q.toRotationMatrix(), 2, 1, 0) * 57.3)[0]),
-      {10, 90}, {255, 255, 255});
+      img, fmt::format("gimbal yaw{:.2f}", gimbal_yaw), {10, 90}, {255, 255, 255});
 
     nlohmann::json data;
     const auto & aim_solution = aimer.last_solution();
@@ -124,17 +124,33 @@ int main(int argc, char * argv[])
     data["t"] = t;
     data["control"] = command.control;
     data["target_present"] = !targets.empty();
-    data["aim_mode"] =
-      aim_solution.mode == auto_aim::AimMode::UpperCenterHold ? "upper_center_hold" : "direct_armor";
-    data["center_hold_active"] = aim_solution.mode == auto_aim::AimMode::UpperCenterHold;
+    if (aim_solution.mode == auto_aim::AimMode::IndirectArmor) {
+      data["aim_mode"] = "indirect_armor";
+    } else if (aim_solution.mode == auto_aim::AimMode::CenterHold) {
+      data["aim_mode"] = "center_hold";
+    } else {
+      data["aim_mode"] = "direct_armor";
+    }
+    data["center_hold_active"] = aim_solution.mode == auto_aim::AimMode::CenterHold;
     data["impact_armor_id"] = aim_solution.impact_armor_id;
     data["impact_time_error_ms"] =
       std::isfinite(aim_solution.impact_time_error_s) ? aim_solution.impact_time_error_s * 1e3 : 0.0;
     data["center_hold_ready"] =
-      aim_solution.valid && aim_solution.mode == auto_aim::AimMode::UpperCenterHold &&
+      aim_solution.valid && aim_solution.mode == auto_aim::AimMode::CenterHold &&
       std::abs(aim_solution.impact_time_error_s) <= aimer.center_hold_fire_window();
     data["effective_bullet_speed"] = aimer.effective_bullet_speed();
     data["center_yaw"] = aim_solution.center_yaw * 57.3;
+    data["total_horizon_s"] = aim_solution.total_horizon_s;
+    data["translate_disp_m"] = aim_solution.translate_disp_m;
+    data["rotate_adv_rad"] = aim_solution.rotate_adv_rad;
+    data["selected_plate_id"] = aim_solution.selected_plate_id;
+    data["adjacent_plate_id"] = aim_solution.adjacent_plate_id;
+    data["continuity_confidence"] = aim_solution.continuity_confidence;
+    data["same_plate_confidence"] = aim_solution.same_plate_confidence;
+    data["predicted_miss_m"] =
+      std::isfinite(aim_solution.predicted_miss_m) ? aim_solution.predicted_miss_m : 0.0;
+    data["time_to_window_s"] =
+      std::isfinite(aim_solution.time_to_window_s) ? aim_solution.time_to_window_s : 0.0;
 
     // 装甲板原始观测数据
     data["armor_num"] = armors.size();
@@ -148,8 +164,9 @@ int main(int argc, char * argv[])
       data["armor_center_y"] = armor.center_norm.y;
     }
 
-    auto yaw = gimbal_ypr[0];
-    data["gimbal_yaw"] = yaw * 57.3;
+    data["gimbal_roll"] = gimbal_roll;
+    data["gimbal_pitch"] = gimbal_pitch;
+    data["gimbal_yaw"] = gimbal_yaw;
     data["cmd_yaw"] = command.yaw * 57.3;
     data["cmd_pitch"] = command.pitch * 57.3;
     data["shoot"] = command.shoot;

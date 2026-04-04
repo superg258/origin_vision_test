@@ -23,6 +23,8 @@ private:
   double judge_distance_;
   double first_tolerance_;
   double second_tolerance_;
+  double fire_window_scale_;
+  double max_predicted_miss_scale_;
   double high_spin_force_fire_enter_speed_;
   double high_spin_force_fire_exit_speed_;
   bool auto_fire_;
