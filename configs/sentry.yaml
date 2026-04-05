@@ -31,9 +31,9 @@ fov_v: 56.7
 new_fov_h: 27 #67
 new_fov_v: 40.9
 usb_frame_rate: 50
-usb_exposure: 500 #1-80000______250
+usb_exposure: 200 #1-80000______250
 usb_gamma: 160
-usb_gain: 60 #0-96
+usb_gain: 20 #0-96
 usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
 omni_camera_read_timeout_ms: 10
 omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
@@ -47,8 +47,8 @@ omni_fov_v_deg: 67.0
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
-exposure_ms: 3
-gain: 16
+exposure_ms: 0.8
+gain: 10
 vid_pid: "2bdf:0001"
 
 #####-----传统方法参数-----#####
@@ -101,7 +101,7 @@ first_tolerance: 5 # 近距离射击容差，degree
 second_tolerance: 2 # 远距离射击容差，degree
 judge_distance: 3 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
-high_spin_force_fire_enabled: false
+high_spin_force_fire_enabled: true
 high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
 
@@ -120,5 +120,5 @@ R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.9998146501
 t_camera2gimbal: [0.081834836810026332, 0.0038077150929364738, 0.087564665738670097]
 
 # 重投影误差: 0.2408px
-camera_matrix: [1819.6288746257767, 0, 710.02392632862222, 0, 1820.2802320435612, 563.68047553227132, 0, 0, 1]
-distort_coeffs: [-0.072363804824114322, 0.18129952721338904, 0.0010944209124647635, 0.0011406459460747969, 0]
+camera_matrix: [1821.1132513707155, 0, 706.8081675332885, 0, 1819.9743902530874, 567.16646996479801, 0, 0, 1]
+distort_coeffs: [-0.080286476240957957, 0.21330154793834763, 0.00059263370814788122, 0.0008358860631919033, 0]

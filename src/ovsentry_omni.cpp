@@ -197,7 +197,7 @@ std::optional<omniperception::OmniCandidate> build_omni_candidate(
   candidate.base_big_yaw_rad = base_big_yaw_rad;
   candidate.abs_yaw_rad = base_big_yaw_rad + result.delta_yaw_deg / 57.3;
   apply_abs_yaw_target(candidate.command, candidate.abs_yaw_rad);
-  candidate.command.pitch = 0.001;
+  candidate.command.pitch = 0.26;
   return candidate;
 }
 
@@ -627,7 +627,7 @@ int main(int argc, char * argv[])
     plotter.plot(data);
 
     prev_omni_mode = omni_mode;
-    if (!display) continue;
+    if (display) continue;
 
     tools::draw_text(main_img, fmt::format("[{}]", tracker_state), {10, 30}, {255, 255, 255}, 0.8, 2);
     tools::draw_text(
