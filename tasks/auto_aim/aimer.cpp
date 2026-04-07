@@ -2,7 +2,10 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "tools/logger.hpp"
@@ -15,16 +18,30 @@ Aimer::Aimer(const std::string & config_path)
 : left_yaw_offset_(std::nullopt), right_yaw_offset_(std::nullopt)
 {
   auto yaml = YAML::LoadFile(config_path);
-  yaw_offset_ = yaml["yaw_offset"].as<double>() / 57.3;        // degree to rad
-  pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;    // degree to rad
-  comming_angle_ = yaml["comming_angle"].as<double>() / 57.3;  // degree to rad
-  leaving_angle_ = yaml["leaving_angle"].as<double>() / 57.3;  // degree to rad
+  yaw_offset_ = yaml["yaw_offset"].as<double>() / 57.3;
+  pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;
+  comming_angle_ = yaml["comming_angle"].as<double>() / 57.3;
+  leaving_angle_ = yaml["leaving_angle"].as<double>() / 57.3;
+  resistance_k_ = yaml["resistance_k"].as<double>(0.01);
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
   low_speed_delay_time_ = yaml["low_speed_delay_time"].as<double>();
-  decision_speed_ = yaml["decision_speed"].as<double>();
+  decision_speed_enter_ = yaml["decision_speed_enter"].as<double>(yaml["decision_speed"].as<double>());
+  decision_speed_exit_ =
+    yaml["decision_speed_exit"].as<double>(std::max(0.1, decision_speed_enter_ * 0.75));
+  if (decision_speed_exit_ > decision_speed_enter_) {
+    decision_speed_exit_ = decision_speed_enter_ * 0.75;
+  }
+  low_speed_threshold_enter_ =
+    yaml["low_speed_threshold"].as<double>(std::min(3.0, decision_speed_enter_));
+  low_speed_threshold_exit_ =
+    yaml["low_speed_threshold_exit"].as<double>(
+      std::min(decision_speed_enter_, low_speed_threshold_enter_ + 0.6));
+  if (low_speed_threshold_exit_ < low_speed_threshold_enter_) {
+    low_speed_threshold_exit_ = low_speed_threshold_enter_;
+  }
   if (yaml["left_yaw_offset"].IsDefined() && yaml["right_yaw_offset"].IsDefined()) {
-    left_yaw_offset_ = yaml["left_yaw_offset"].as<double>() / 57.3;    // degree to rad
-    right_yaw_offset_ = yaml["right_yaw_offset"].as<double>() / 57.3;  // degree to rad
+    left_yaw_offset_ = yaml["left_yaw_offset"].as<double>() / 57.3;
+    right_yaw_offset_ = yaml["right_yaw_offset"].as<double>() / 57.3;
     tools::logger()->info("[Aimer] successfully loading shootmode");
   }
 }
@@ -37,36 +54,28 @@ io::Command Aimer::aim(
   auto target = targets.front();
 
   double delay_time =
-    std::abs(target.ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+    is_high_speed(std::abs(target.ekf_x()[7])) ? high_speed_delay_time_ : low_speed_delay_time_;
 
   if (bullet_speed < 14) bullet_speed = 23;
 
-  // 考虑detecor和tracker所消耗的时间，此外假设aimer的用时可忽略不计
   auto future = timestamp;
+  double processing_delay = 0.005;
   if (to_now) {
-    double dt;
-    dt = tools::delta_time(std::chrono::steady_clock::now(), timestamp) + delay_time;
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
+    processing_delay = std::max(0.0, tools::delta_time(std::chrono::steady_clock::now(), timestamp));
   }
-
-  else {
-    auto dt = 0.005 + delay_time;  //detector-aimer耗时0.005+发弹延时0.1
-    // tools::logger()->info("dt is {:.4f} second", dt);
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
-  }
+  const double predict_delay = processing_delay + delay_time;
+  future += std::chrono::microseconds(static_cast<int64_t>(predict_delay * 1e6));
+  target.predict(future);
 
   auto aim_point0 = choose_aim_point(target);
   debug_aim_point = aim_point0;
   if (!aim_point0.valid) {
-    // tools::logger()->debug("Invalid aim_point0.");
     return {false, false, 0, 0};
   }
 
   Eigen::Vector3d xyz0 = aim_point0.xyza.head(3);
   auto d0 = std::sqrt(xyz0[0] * xyz0[0] + xyz0[1] * xyz0[1]);
-  tools::Trajectory trajectory0(bullet_speed, d0, xyz0[2]);
+  tools::Trajectory trajectory0(bullet_speed, d0, xyz0[2], resistance_k_);
   if (trajectory0.unsolvable) {
     tools::logger()->debug(
       "[Aimer] Unsolvable trajectory0: {:.2f} {:.2f} {:.2f}", bullet_speed, d0, xyz0[2]);
@@ -74,30 +83,25 @@ io::Command Aimer::aim(
     return {false, false, 0, 0};
   }
 
-  // 迭代求解飞行时间 (最多10次，收敛条件：相邻两次fly_time差 <0.001)
   bool converged = false;
   double prev_fly_time = trajectory0.fly_time;
   tools::Trajectory current_traj = trajectory0;
-  std::vector<Target> iteration_target(10, target);  // 创建10个目标副本用于迭代预测
+  std::vector<Target> iteration_target(10, target);
 
   for (int iter = 0; iter < 10; ++iter) {
-    // 预测目标在 future + prev_fly_time 时刻的位置
-    auto predict_time = future + std::chrono::microseconds(static_cast<int>(prev_fly_time * 1e6));
+    auto predict_time = future + std::chrono::microseconds(static_cast<int64_t>(prev_fly_time * 1e6));
     iteration_target[iter].predict(predict_time);
 
-    // 计算瞄准点
     auto aim_point = choose_aim_point(iteration_target[iter]);
     debug_aim_point = aim_point;
     if (!aim_point.valid) {
       return {false, false, 0, 0};
     }
 
-    // 计算新弹道
     Eigen::Vector3d xyz = aim_point.xyza.head(3);
     double d = std::sqrt(xyz.x() * xyz.x() + xyz.y() * xyz.y());
-    current_traj = tools::Trajectory(bullet_speed, d, xyz.z());
+    current_traj = tools::Trajectory(bullet_speed, d, xyz.z(), resistance_k_);
 
-    // 检查弹道是否可解
     if (current_traj.unsolvable) {
       tools::logger()->debug(
         "[Aimer] Unsolvable trajectory in iter {}: speed={:.2f}, d={:.2f}, z={:.2f}", iter + 1,
@@ -106,18 +110,17 @@ io::Command Aimer::aim(
       return {false, false, 0, 0};
     }
 
-    // 检查收敛条件
     if (std::abs(current_traj.fly_time - prev_fly_time) < 0.001) {
       converged = true;
       break;
     }
     prev_fly_time = current_traj.fly_time;
   }
+  (void)converged;
 
-  // 计算最终角度
   Eigen::Vector3d final_xyz = debug_aim_point.xyza.head(3);
   double yaw = std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset_;
-  double pitch = -(current_traj.pitch + pitch_offset_);  //世界坐标系下pitch向上为负
+  double pitch = -(current_traj.pitch + pitch_offset_);
   return {true, false, yaw, pitch};
 }
 
@@ -140,53 +143,96 @@ io::Command Aimer::aim(
   return command;
 }
 
+bool Aimer::is_high_speed(double abs_vyaw)
+{
+  if (high_speed_mode_) {
+    if (abs_vyaw < decision_speed_exit_) high_speed_mode_ = false;
+  } else {
+    if (abs_vyaw > decision_speed_enter_) high_speed_mode_ = true;
+  }
+  return high_speed_mode_;
+}
+
+bool Aimer::use_low_speed_direct(double abs_vyaw)
+{
+  if (low_speed_direct_mode_) {
+    if (abs_vyaw > low_speed_threshold_exit_) low_speed_direct_mode_ = false;
+  } else {
+    if (abs_vyaw < low_speed_threshold_enter_) low_speed_direct_mode_ = true;
+  }
+  return low_speed_direct_mode_;
+}
+
 AimPoint Aimer::choose_aim_point(const Target & target)
 {
   Eigen::VectorXd ekf_x = target.ekf_x();
   std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
   auto armor_num = armor_xyza_list.size();
-  // 如果装甲板未发生过跳变，则只有当前装甲板的位置已知
-  if (!target.jumped) return {true, armor_xyza_list[0]};
+  constexpr int SRC_INVALID = 0;
+  constexpr int SRC_SINGLE_FIXED = 1;
+  constexpr int SRC_OBSERVED_DIRECT = 2;
+  constexpr int SRC_DIRECT_LAST_ID = 3;
+  constexpr int SRC_DIRECT_MIN_SWING = 4;
+  constexpr int SRC_DIRECT_OBS_MATCH = 5;
+  constexpr int SRC_INDIRECT = 6;
+  constexpr int SRC_DIRECT_LOCKED = 7;
+  auto make_point = [&](bool valid, const Eigen::Vector4d & xyza, int armor_id, int source) {
+    AimPoint p;
+    p.valid = valid;
+    p.xyza = xyza;
+    p.armor_id = armor_id;
+    p.source = source;
+    return p;
+  };
 
-  // 整车旋转中心的球坐标yaw
+  if (armor_num == 0) {
+    lock_id_ = -1;
+    return make_point(false, Eigen::Vector4d::Zero(), -1, SRC_INVALID);
+  }
+  if (armor_num == 1) {
+    lock_id_ = -1;
+    return make_point(true, armor_xyza_list[0], 0, SRC_SINGLE_FIXED);
+  }
+
   auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
 
-  // 如果delta_angle为0，则该装甲板中心和整车中心的连线在世界坐标系的xy平面过原点
+  auto choose_min_swing_id = [&](const std::vector<int> & ids) -> int {
+    int best_id = ids.front();
+    double best_cost = std::numeric_limits<double>::infinity();
+    for (int id : ids) {
+      double cost = std::abs(tools::limit_rad(armor_xyza_list[id][3] - center_yaw));
+      if (cost < best_cost) {
+        best_cost = cost;
+        best_id = id;
+      }
+    }
+    return best_id;
+  };
+  auto contains_id = [&](const std::vector<int> & ids, int id) -> bool {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+  };
+  auto closest_id_to_obs = [&](const Eigen::Vector4d & obs_xyza) -> int {
+    int best_id = -1;
+    double best_dist = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < armor_num; ++i) {
+      const double d = (armor_xyza_list[i].head(3) - obs_xyza.head(3)).norm();
+      if (d < best_dist) {
+        best_dist = d;
+        best_id = static_cast<int>(i);
+      }
+    }
+    return best_id;
+  };
+
   std::vector<double> delta_angle_list;
-  for (int i = 0; i < armor_num; i++) {
+  for (size_t i = 0; i < armor_num; i++) {
     auto delta_angle = tools::limit_rad(armor_xyza_list[i][3] - center_yaw);
     delta_angle_list.emplace_back(delta_angle);
   }
 
-  // 不考虑小陀螺
-  if (std::abs(target.ekf_x()[8]) <= 2 && target.name != ArmorName::outpost) {
-    // 选择在可射击范围内的装甲板
-    std::vector<int> id_list;
-    for (int i = 0; i < armor_num; i++) {
-      if (std::abs(delta_angle_list[i]) > 60 / 57.3) continue;
-      id_list.push_back(i);
-    }
-    // 绝无可能
-    if (id_list.empty()) {
-      tools::logger()->warn("Empty id list!");
-      return {false, armor_xyza_list[0]};
-    }
-
-    // 锁定模式：防止在两个都呈45度的装甲板之间来回切换
-    if (id_list.size() > 1) {
-      int id0 = id_list[0], id1 = id_list[1];
-
-      // 未处于锁定模式时，选择delta_angle绝对值较小的装甲板，进入锁定模式
-      if (lock_id_ != id0 && lock_id_ != id1)
-        lock_id_ = (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
-
-      return {true, armor_xyza_list[lock_id_]};
-    }
-
-    // 只有一个装甲板在可射击范围内时，退出锁定模式
-    lock_id_ = -1;
-    return {true, armor_xyza_list[id_list[0]]};
-  }
+  const double vyaw = target.ekf_x()[7];
+  const double abs_vyaw = std::abs(vyaw);
+  const double rear_reject_angle = 100.0 / 57.3;
 
   double coming_angle, leaving_angle;
   if (target.name == ArmorName::outpost) {
@@ -196,15 +242,178 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     coming_angle = comming_angle_;
     leaving_angle = leaving_angle_;
   }
+  const bool obs_fresh =
+    target.has_last_observed_armor() && target.last_observed_age() <= 0.14;
+  const Eigen::Vector4d obs_xyza =
+    obs_fresh ? target.last_observed_armor_xyza() : Eigen::Vector4d::Zero();
+  const int obs_match_id = obs_fresh ? closest_id_to_obs(obs_xyza) : -1;
 
-  // 在小陀螺时，一侧的装甲板不断出现，另一侧的装甲板不断消失，显然前者被打中的概率更高
-  for (int i = 0; i < armor_num; i++) {
+  if (target.name != ArmorName::outpost && use_low_speed_direct(abs_vyaw)) {
+    int obs_direct_id = -1;
+    if (obs_fresh) {
+      if (abs_vyaw < 0.9) {
+        obs_direct_id = obs_match_id;
+      }
+      const double obs_delta = tools::limit_rad(obs_xyza[3] - center_yaw);
+      const double obs_visible_delta = std::abs(obs_delta);
+      bool direction_ok = true;
+      if (abs_vyaw > 0.4) {
+        direction_ok =
+          (vyaw > 0 && obs_delta < leaving_angle) || (vyaw < 0 && obs_delta > -leaving_angle);
+      }
+      if (
+        std::abs(obs_delta) <= coming_angle && obs_visible_delta <= rear_reject_angle &&
+        direction_ok)
+      {
+        obs_direct_id = obs_match_id;
+      }
+    }
+
+    std::vector<int> direct_ids;
+    for (size_t i = 0; i < armor_num; i++) {
+      if (std::abs(delta_angle_list[i]) > coming_angle) continue;
+      double visible_delta = std::abs(tools::limit_rad(armor_xyza_list[i][3] - center_yaw));
+      if (visible_delta > rear_reject_angle) continue;
+      direct_ids.push_back(static_cast<int>(i));
+    }
+
+    if (direct_ids.empty()) {
+      lock_id_ = -1;
+      return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+    }
+
+    if (abs_vyaw > 0.4) {
+      std::vector<int> direction_preferred;
+      for (int id : direct_ids) {
+        if (vyaw > 0 && delta_angle_list[id] < leaving_angle) direction_preferred.push_back(id);
+        if (vyaw < 0 && delta_angle_list[id] > -leaving_angle) direction_preferred.push_back(id);
+      }
+      if (!direction_preferred.empty()) direct_ids.swap(direction_preferred);
+    }
+
+    constexpr double kLockSwitchMargin = 6.0 / 57.3;
+    constexpr double kLockComingMargin = 6.0 / 57.3;
+    constexpr double kLockRearMargin = 8.0 / 57.3;
+    constexpr double kLockLeavingMargin = 4.0 / 57.3;
+    auto swing_cost = [&](int id) {
+      return std::abs(tools::limit_rad(armor_xyza_list[id][3] - center_yaw));
+    };
+    auto lock_retainable = [&](int id) {
+      if (id < 0 || id >= static_cast<int>(armor_num) || !contains_id(direct_ids, id)) return false;
+      const double delta = delta_angle_list[id];
+      const double visible_delta = std::abs(tools::limit_rad(armor_xyza_list[id][3] - center_yaw));
+      if (coming_angle - std::abs(delta) < kLockComingMargin) return false;
+      if (rear_reject_angle - visible_delta < kLockRearMargin) return false;
+      if (abs_vyaw > 0.4) {
+        if (vyaw > 0 && delta > leaving_angle - kLockLeavingMargin) return false;
+        if (vyaw < 0 && delta < -leaving_angle + kLockLeavingMargin) return false;
+      }
+      return true;
+    };
+
+    int preferred_id = -1;
+    int preferred_source = SRC_DIRECT_MIN_SWING;
+    if (obs_direct_id >= 0 && contains_id(direct_ids, obs_direct_id)) {
+      preferred_id = obs_direct_id;
+      preferred_source = SRC_OBSERVED_DIRECT;
+    } else if (
+      target.last_id >= 0 && target.last_id < static_cast<int>(armor_num) &&
+      contains_id(direct_ids, target.last_id))
+    {
+      preferred_id = target.last_id;
+      preferred_source = SRC_DIRECT_LAST_ID;
+    } else if (obs_match_id >= 0 && contains_id(direct_ids, obs_match_id)) {
+      preferred_id = obs_match_id;
+      preferred_source = SRC_DIRECT_OBS_MATCH;
+    } else {
+      preferred_id = choose_min_swing_id(direct_ids);
+      preferred_source = SRC_DIRECT_MIN_SWING;
+    }
+
+    if (!lock_retainable(lock_id_)) lock_id_ = -1;
+
+    int chosen_id = preferred_id;
+    int chosen_source = preferred_source;
+    if (lock_id_ >= 0 && lock_retainable(lock_id_)) {
+      if (preferred_id != lock_id_) {
+        const double lock_cost = swing_cost(lock_id_);
+        const double preferred_cost = swing_cost(preferred_id);
+        if (abs_vyaw < 1.2 || lock_cost <= preferred_cost + kLockSwitchMargin) {
+          chosen_id = lock_id_;
+          chosen_source = SRC_DIRECT_LOCKED;
+        } else {
+          lock_id_ = preferred_id;
+        }
+      } else {
+        chosen_id = lock_id_;
+        chosen_source = SRC_DIRECT_LOCKED;
+      }
+    } else if (lock_retainable(preferred_id)) {
+      lock_id_ = preferred_id;
+    }
+
+    return make_point(true, armor_xyza_list[chosen_id], chosen_id, chosen_source);
+  }
+  lock_id_ = -1;
+
+  std::vector<int> direct_ids;
+  for (size_t i = 0; i < armor_num; i++) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-    if (ekf_x[7] > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
-    if (ekf_x[7] < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};
+    if (target.name != ArmorName::outpost) {
+      double visible_delta = std::abs(tools::limit_rad(armor_xyza_list[i][3] - center_yaw));
+      if (visible_delta > rear_reject_angle) continue;
+    }
+    if (vyaw > 0 && delta_angle_list[i] < leaving_angle) direct_ids.push_back(static_cast<int>(i));
+    if (vyaw < 0 && delta_angle_list[i] > -leaving_angle) direct_ids.push_back(static_cast<int>(i));
+    if (abs_vyaw < 1e-3) direct_ids.push_back(static_cast<int>(i));
   }
 
-  return {false, armor_xyza_list[0]};
+  if (!direct_ids.empty()) {
+    if (abs_vyaw < 1.2 && obs_match_id >= 0 && contains_id(direct_ids, obs_match_id)) {
+      return make_point(true, armor_xyza_list[obs_match_id], obs_match_id, SRC_DIRECT_OBS_MATCH);
+    }
+    if (
+      abs_vyaw < 1.2 && target.last_id >= 0 && target.last_id < static_cast<int>(armor_num) &&
+      contains_id(direct_ids, target.last_id))
+    {
+      return make_point(true, armor_xyza_list[target.last_id], target.last_id, SRC_DIRECT_LAST_ID);
+    }
+    int chosen = choose_min_swing_id(direct_ids);
+    return make_point(true, armor_xyza_list[chosen], chosen, SRC_DIRECT_MIN_SWING);
+  }
+
+  if (abs_vyaw < 1e-3) return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+
+  const double wait_angle = (vyaw > 0) ? -coming_angle : coming_angle;
+  const double max_out_angle = leaving_angle;
+
+  int indirect_id = -1;
+  double min_armor_to_wait = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < armor_num; i++) {
+    const double delta = delta_angle_list[i];
+    const double armor_to_wait =
+      tools::limit_rad(((vyaw > 0) ? (wait_angle - delta) : (delta - wait_angle)) - CV_PI +
+                       max_out_angle) +
+      CV_PI - max_out_angle;
+    if (armor_to_wait < min_armor_to_wait) {
+      min_armor_to_wait = armor_to_wait;
+      indirect_id = static_cast<int>(i);
+    }
+  }
+
+  if (indirect_id < 0) return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+
+  double emerge_time = min_armor_to_wait / (abs_vyaw + 1e-3);
+  emerge_time = std::clamp(emerge_time, 0.0, 0.35);
+
+  Target future_target = target;
+  future_target.predict(emerge_time);
+  auto future_xyza_list = future_target.armor_xyza_list();
+  if (indirect_id >= static_cast<int>(future_xyza_list.size())) {
+    return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+  }
+
+  return make_point(true, future_xyza_list[indirect_id], indirect_id, SRC_INDIRECT);
 }
 
 }  // namespace auto_aim

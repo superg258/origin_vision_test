@@ -7,13 +7,14 @@ struct Trajectory
 {
   bool unsolvable;
   double fly_time;
-  double pitch;  // 抬头为正
+  double pitch;  // 鎶ご涓烘
 
-  // 不考虑空气阻力
-  // v0 子弹初速度大小，单位：m/s
-  // d 目标水平距离，单位：m
-  // h 目标竖直高度，单位：m
-  Trajectory(const double v0, const double d, const double h);
+  // 鍚┖姘旈樆鍔涘脊閬撴ā鍨?
+  // v0 瀛愬脊鍒濋€熷害澶у皬锛屽崟浣嶏細m/s
+  // d 鐩爣姘村钩璺濈锛屽崟浣嶏細m
+  // h 鐩爣绔栫洿楂樺害锛屽崟浣嶏細m
+  // k 绌烘皵闃诲姏绯绘暟锛堥粯璁?0.01锛?
+  Trajectory(double v0, double d, double h, double k = 0.01);
 };
 
 }  // namespace tools

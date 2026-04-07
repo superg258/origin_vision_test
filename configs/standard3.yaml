@@ -41,7 +41,12 @@ yaw_offset: 2 # degree -2.5
 pitch_offset: 6.5 # degree 2
 comming_angle: 55 # degree
 leaving_angle: 20 # degree
+resistance_k: 0.023 # 空气阻力系数
 decision_speed: 7 # rad/s
+decision_speed_enter: 3.8 # rad/s
+decision_speed_exit: 3.0 # rad/s
+low_speed_threshold: 2.8 # rad/s
+low_speed_threshold_exit: 3.4 # rad/s
 high_speed_delay_time: 0.0 # s
 low_speed_delay_time: 0.0 # s planner use this value
 
