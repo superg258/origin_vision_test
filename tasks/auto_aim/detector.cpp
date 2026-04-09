@@ -5,6 +5,7 @@
 
 #include <filesystem>
 
+#include "pattern_geometry.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
 
@@ -290,12 +291,15 @@ Color Detector::get_color(const cv::Mat & bgr_img, const std::vector<cv::Point> 
 
 cv::Mat Detector::get_pattern(const cv::Mat & bgr_img, const Armor & armor) const
 {
+  const auto expand_ratio = pattern_expand_ratio_for(armor.name);
+
   // 延长灯条获得装甲板角点
-  // 1.125 = 0.5 * armor_height / lightbar_length = 0.5 * 126mm / 56mm
-  auto tl = armor.left.center - armor.left.top2bottom * 1.125;
-  auto bl = armor.left.center + armor.left.top2bottom * 1.125;
-  auto tr = armor.right.center - armor.right.top2bottom * 1.125;
-  auto br = armor.right.center + armor.right.top2bottom * 1.125;
+  // 56mm 是灯条长度；识别 ROI 沿灯条方向按整块装甲板高度外扩。
+  // outpost/base 使用 100mm，其他装甲板保持 126mm。该逻辑不影响 PnP 解算尺寸。
+  auto tl = armor.left.center - armor.left.top2bottom * expand_ratio;
+  auto bl = armor.left.center + armor.left.top2bottom * expand_ratio;
+  auto tr = armor.right.center - armor.right.top2bottom * expand_ratio;
+  auto br = armor.right.center + armor.right.top2bottom * expand_ratio;
 
   auto roi_left = std::max<int>(std::min(tl.x, bl.x), 0);
   auto roi_top = std::max<int>(std::min(tl.y, tr.y), 0);
