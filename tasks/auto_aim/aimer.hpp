@@ -4,6 +4,7 @@
 #include <Eigen/Dense>
 #include <chrono>
 #include <list>
+#include <optional>
 
 #include "io/cboard.hpp"
 #include "io/command.hpp"
@@ -14,8 +15,10 @@ namespace auto_aim
 
 struct AimPoint
 {
-  bool valid;
-  Eigen::Vector4d xyza;
+  bool valid = false;
+  Eigen::Vector4d xyza = Eigen::Vector4d::Zero();
+  int armor_id = -1;
+  int source = 0;
 };
 
 class Aimer
@@ -35,12 +38,13 @@ private:
   double yaw_offset_;
   std::optional<double> left_yaw_offset_, right_yaw_offset_;
   double pitch_offset_;
+  double resistance_k_;
   double comming_angle_;
   double leaving_angle_;
-  double lock_id_ = -1;
   double high_speed_delay_time_;
   double low_speed_delay_time_;
   double decision_speed_;
+  int lock_id_ = -1;
 
   AimPoint choose_aim_point(const Target & target);
 };

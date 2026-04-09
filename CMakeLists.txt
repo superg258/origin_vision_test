@@ -131,6 +131,9 @@ target_link_libraries(ovsentry_omni_logic_test ${OpenCV_LIBS} fmt::fmt tools)
 add_executable(ros2_gimbal_big_yaw_lookup_test tests/ros2_gimbal_big_yaw_lookup_test.cpp)
 target_link_libraries(ros2_gimbal_big_yaw_lookup_test ${OpenCV_LIBS} fmt::fmt tools)
 
+add_executable(outpost_auto_aim_logic_test tests/outpost_auto_aim_logic_test.cpp)
+target_link_libraries(outpost_auto_aim_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/local/local_tests.cmake OPTIONAL)
 
 # 只有在 io 子目录成功生成对应的可选 ROS2 库时，才编译相关入口。

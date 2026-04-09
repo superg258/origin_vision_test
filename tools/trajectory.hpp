@@ -9,11 +9,11 @@ struct Trajectory
   double fly_time;
   double pitch;  // 抬头为正
 
-  // 不考虑空气阻力
   // v0 子弹初速度大小，单位：m/s
   // d 目标水平距离，单位：m
   // h 目标竖直高度，单位：m
-  Trajectory(const double v0, const double d, const double h);
+  // k 空气阻力系数，接近 0 时退化为无空气阻力模型
+  Trajectory(double v0, double d, double h, double k = 0.01);
 };
 
 }  // namespace tools

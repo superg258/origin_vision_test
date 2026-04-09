@@ -9,9 +9,12 @@
 
 namespace auto_aim
 {
+namespace
+{
 constexpr double LIGHTBAR_LENGTH = 56e-3;     // m
 constexpr double BIG_ARMOR_WIDTH = 230e-3;    // m
 constexpr double SMALL_ARMOR_WIDTH = 135e-3;  // m
+constexpr double FIXED_ARMOR_WIDTH = 129e-3;  // m, outpost/base fixed armor width
 
 const std::vector<cv::Point3f> BIG_ARMOR_POINTS{
   {0, BIG_ARMOR_WIDTH / 2, LIGHTBAR_LENGTH / 2},
@@ -23,6 +26,20 @@ const std::vector<cv::Point3f> SMALL_ARMOR_POINTS{
   {0, -SMALL_ARMOR_WIDTH / 2, LIGHTBAR_LENGTH / 2},
   {0, -SMALL_ARMOR_WIDTH / 2, -LIGHTBAR_LENGTH / 2},
   {0, SMALL_ARMOR_WIDTH / 2, -LIGHTBAR_LENGTH / 2}};
+const std::vector<cv::Point3f> FIXED_ARMOR_POINTS{
+  {0, FIXED_ARMOR_WIDTH / 2, LIGHTBAR_LENGTH / 2},
+  {0, -FIXED_ARMOR_WIDTH / 2, LIGHTBAR_LENGTH / 2},
+  {0, -FIXED_ARMOR_WIDTH / 2, -LIGHTBAR_LENGTH / 2},
+  {0, FIXED_ARMOR_WIDTH / 2, -LIGHTBAR_LENGTH / 2}};
+
+const std::vector<cv::Point3f> & select_object_points(ArmorName name, ArmorType type)
+{
+  if (name == ArmorName::outpost || name == ArmorName::base) {
+    return FIXED_ARMOR_POINTS;
+  }
+  return (type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
+}
+}  // namespace
 
 Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3d::Identity())
 {
@@ -54,8 +71,7 @@ void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
 //solvePnP（获得姿态）
 void Solver::solve(Armor & armor) const
 {
-  const auto & object_points =
-    (armor.type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
+  const auto & object_points = select_object_points(armor.name, armor.type);
 
   cv::Vec3d rvec, tvec;
   cv::solvePnP(
@@ -113,18 +129,15 @@ std::vector<cv::Point2f> Solver::reproject_armor(
   cv::Rodrigues(R_armor2camera_cv, rvec);
   cv::Vec3d tvec(t_armor2camera[0], t_armor2camera[1], t_armor2camera[2]);
 
-  // reproject
   std::vector<cv::Point2f> image_points;
-  const auto & object_points = (type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
+  const auto & object_points = select_object_points(name, type);
   cv::projectPoints(object_points, rvec, tvec, camera_matrix_, distort_coeffs_, image_points);
   return image_points;
 }
 
 double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
 {
-  // solve
-  const auto & object_points =
-    (armor.type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
+  const auto & object_points = select_object_points(armor.name, armor.type);
 
   cv::Vec3d rvec, tvec;
   cv::solvePnP(

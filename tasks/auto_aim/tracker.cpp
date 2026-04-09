@@ -2,8 +2,11 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
+#include <vector>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -265,18 +268,13 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   auto & armor = armors.front();
   solver_.solve(armor);
 
-  // 根据兵种优化初始化参数
   if (armor.name == ArmorName::outpost) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}};
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
     target_ = Target(armor, t, 0.2765, 3, P0_dig);
-  }
-
-  else if (armor.name == ArmorName::base) {
+  } else if (armor.name == ArmorName::base) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
     target_ = Target(armor, t, 0.3205, 3, P0_dig);
-  }
-
-  else {
+  } else {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
     target_ = Target(armor, t, 0.2, 4, P0_dig);
   }
@@ -288,28 +286,52 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
 {
   target_.predict(t);
 
-  int found_count = 0;
-  double min_x = 1e10;  // 画面最左侧
-  for (const auto & armor : armors) {
-    if (armor.name != target_.name || armor.type != target_.armor_type) continue;
-    found_count++;
-    min_x = armor.center.x < min_x ? armor.center.x : min_x;
-  }
-
-  if (found_count == 0) return false;
-
+  std::vector<Armor *> candidates;
+  candidates.reserve(armors.size());
   for (auto & armor : armors) {
-    if (
-      armor.name != target_.name || armor.type != target_.armor_type
-      //  || armor.center.x != min_x
-    )
-      continue;
+    if (armor.name != target_.name || armor.type != target_.armor_type) continue;
+    candidates.push_back(&armor);
+  }
+  if (candidates.empty()) return false;
 
+  const std::vector<Eigen::Vector4d> predicted_armors = target_.armor_xyza_list();
+  const int predicted_count = static_cast<int>(predicted_armors.size());
+  const int ref_id =
+    predicted_count == 0 ? 0 : std::clamp(target_.last_id, 0, predicted_count - 1);
+  const Eigen::Vector3d ref_ypd = predicted_count == 0
+                                    ? Eigen::Vector3d::Zero()
+                                    : tools::xyz2ypd(predicted_armors[ref_id].head(3));
+  const double center_yaw = std::atan2(target_.ekf_x()[2], target_.ekf_x()[0]);
+
+  Armor * best_armor = nullptr;
+  double best_score = std::numeric_limits<double>::infinity();
+
+  for (auto * armor_ptr : candidates) {
+    auto & armor = *armor_ptr;
     solver_.solve(armor);
 
-    target_.update(armor);
+    double score = 0.0;
+    if (predicted_count > 0) {
+      const Eigen::Vector4d & ref_xyza = predicted_armors[ref_id];
+      score += std::abs(tools::limit_rad(armor.ypr_in_world[0] - ref_xyza[3]));
+      score += std::abs(tools::limit_rad(armor.ypd_in_world[0] - ref_ypd[0]));
+      score += 0.20 * std::abs(armor.ypd_in_world[2] - ref_ypd[2]);
+    }
+
+    if (target_.name != ArmorName::outpost) {
+      const double observed_delta = std::abs(tools::limit_rad(armor.ypr_in_world[0] - center_yaw));
+      if (observed_delta > 100.0 / 57.3) score += 0.8;
+    }
+
+    if (score < best_score) {
+      best_score = score;
+      best_armor = &armor;
+    }
   }
 
+  if (best_armor == nullptr) return false;
+
+  target_.update(*best_armor);
   return true;
 }
 

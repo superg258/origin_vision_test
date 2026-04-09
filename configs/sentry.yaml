@@ -8,8 +8,8 @@ classify_model: assets/tiny_resnet.onnx
 yolo11_model_path: assets/yolo11.xml
 yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/yolov5_0526.xml
-device: GPU
-auto_aim_device: GPU
+device: CPU
+auto_aim_device: CPU
 omni_device: NPU
 min_confidence: 0.8
 use_traditional: true
@@ -92,6 +92,7 @@ yaw_offset: 0.75 # degree -2.5
 pitch_offset: -0.49  # degree 2
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
+resistance_k: 0.023 # 空气阻力系数
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.073 # s
 low_speed_delay_time: 0.065 # s
