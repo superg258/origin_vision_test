@@ -243,7 +243,18 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     }
 
     if (direct_ids.empty()) {
+      std::vector<int> legacy_ids;
+      for (size_t i = 0; i < armor_num; ++i) {
+        if (std::abs(delta_angle_list[i]) <= coming_angle) {
+          legacy_ids.push_back(static_cast<int>(i));
+        }
+      }
+
       lock_id_ = -1;
+      if (!legacy_ids.empty()) {
+        const int chosen = choose_min_swing_id(legacy_ids);
+        return make_point(true, armor_xyza_list[chosen], chosen, SRC_DIRECT_MIN_SWING);
+      }
       return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
     }
 
