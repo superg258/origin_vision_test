@@ -225,6 +225,15 @@ bool same_candidate_frame(
          frame.candidate->timestamp == candidate.timestamp;
 }
 
+bool same_omni_target_continuation(
+  const omniperception::AcceptedOmniTarget & lhs, const omniperception::AcceptedOmniTarget & rhs,
+  double retarget_min_delta_deg)
+{
+  if (lhs.slot != rhs.slot) return false;
+  if (lhs.armor_name != rhs.armor_name) return false;
+  return angular_distance_deg(lhs.abs_yaw_rad, rhs.abs_yaw_rad) < retarget_min_delta_deg;
+}
+
 }  // namespace
 
 const std::string keys =
@@ -278,10 +287,14 @@ int main(int argc, char * argv[])
     yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
   const double omni_hold_release_tolerance_deg =
     yaml["omni_hold_release_tolerance_deg"] ? yaml["omni_hold_release_tolerance_deg"].as<double>() : 3.0;
+  const double omni_command_timeout_s =
+    yaml["omni_command_timeout_s"] ? yaml["omni_command_timeout_s"].as<double>() : 0.5;
   const auto omni_read_timeout = std::chrono::milliseconds(
     std::max(1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
   const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_retarget_cooldown_s));
+  const auto omni_command_timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(omni_command_timeout_s));
 
   tools::logger()->info(
     "[OVSentryOmni] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
@@ -362,7 +375,10 @@ int main(int argc, char * argv[])
   std::optional<io::Command> omni_hold_command;
   std::optional<omniperception::AcceptedOmniTarget> session_accepted_omni_target;
   std::optional<omniperception::AcceptedOmniTarget> cooldown_anchor_omni_target;
+  std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
+  std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
+  bool active_omni_timeout_running = false;
   bool prev_omni_mode = false;
   int frame_count = 0;
 
@@ -416,9 +432,26 @@ int main(int argc, char * argv[])
     bool omni_retarget_cd_active = false;
     bool omni_same_target_continuation = false;
     bool omni_target_reached = false;
+    bool omni_cmd_timeout_active = false;
+    bool omni_cmd_timed_out = false;
     std::string omni_block_reason = "none";
+    double omni_cmd_elapsed_ms = 0.0;
     double omni_retarget_remaining_ms = 0.0;
     const auto now = std::chrono::steady_clock::now();
+
+    auto clear_omni_timeout_session = [&]() {
+        active_omni_timeout_target.reset();
+        active_omni_timeout_started_at = std::chrono::steady_clock::time_point{};
+        active_omni_timeout_running = false;
+      };
+
+    auto clear_omni_redirect_state = [&]() {
+        omni_hold_command.reset();
+        session_accepted_omni_target.reset();
+        cooldown_anchor_omni_target.reset();
+        omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+        clear_omni_timeout_session();
+      };
 
     if (cooldown_anchor_omni_target.has_value() && now >= omni_retarget_cooldown_deadline) {
       cooldown_anchor_omni_target.reset();
@@ -426,11 +459,9 @@ int main(int argc, char * argv[])
     }
 
     if (omni_mode && !prev_omni_mode) {
-      omni_hold_command.reset();
-      session_accepted_omni_target.reset();
+      clear_omni_redirect_state();
     } else if (!omni_mode && prev_omni_mode) {
-      omni_hold_command.reset();
-      session_accepted_omni_target.reset();
+      clear_omni_redirect_state();
     }
 
     if (omni_mode) {
@@ -540,6 +571,14 @@ int main(int argc, char * argv[])
           omni_hold_command = command;
           const auto accepted_target = make_accepted_omni_target(selected_candidate.value());
           session_accepted_omni_target = accepted_target;
+          if (
+            !active_omni_timeout_running || !active_omni_timeout_target.has_value() ||
+            !same_omni_target_continuation(
+              active_omni_timeout_target.value(), accepted_target, omni_retarget_min_delta_deg)) {
+            active_omni_timeout_started_at = now;
+            active_omni_timeout_running = true;
+          }
+          active_omni_timeout_target = accepted_target;
           omni_target_abs_yaw_deg = command.big_yaw * 57.3;
           if (omniperception::should_start_omni_retarget_cooldown(
                 decision, omni_retarget_min_delta_deg)) {
@@ -567,12 +606,42 @@ int main(int argc, char * argv[])
         }
       } else {
         omni_hold_command.reset();
+        clear_omni_timeout_session();
+      }
+
+      if (command.control && command.has_target_yaw) {
+        if (active_omni_timeout_running && active_omni_timeout_target.has_value()) {
+          omni_cmd_timeout_active = true;
+          omni_cmd_elapsed_ms =
+            std::chrono::duration<double, std::milli>(now - active_omni_timeout_started_at).count();
+        }
+
+        const double target_error_deg = angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
+        if (target_error_deg > omni_hold_release_tolerance_deg) {
+          if (
+            active_omni_timeout_running &&
+            (now - active_omni_timeout_started_at) > omni_command_timeout) {
+            tools::logger()->warn(
+              "[OVSentryOmni] omni command timed out after {:.0f}ms without reaching target yaw",
+              omni_cmd_elapsed_ms);
+            command = io::Command{false, false, 0.0, 0.0};
+            omni_target_abs_yaw_deg.reset();
+            omni_hold_applied = false;
+            omni_cmd_timed_out = true;
+            omni_cmd_timeout_active = false;
+            clear_omni_redirect_state();
+          }
+        } else {
+          clear_omni_timeout_session();
+        }
+      } else {
+        clear_omni_timeout_session();
       }
     } else {
       left_img.release();
       right_img.release();
       back_img.release();
-      omni_hold_command.reset();
+      clear_omni_redirect_state();
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (tracker_state == "tracking" && command.control && !targets.empty()) {
         apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
@@ -619,6 +688,9 @@ int main(int argc, char * argv[])
     if (omni_candidate_age_ms.has_value()) data["omni_candidate_age_ms"] = omni_candidate_age_ms.value();
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;
     data["omni_target_reached"] = omni_target_reached ? 1 : 0;
+    data["omni_cmd_timeout_active"] = omni_cmd_timeout_active ? 1 : 0;
+    data["omni_cmd_timed_out"] = omni_cmd_timed_out ? 1 : 0;
+    data["omni_cmd_elapsed_ms"] = omni_cmd_elapsed_ms;
     data["omni_retarget_cd_active"] = omni_retarget_cd_active ? 1 : 0;
     data["omni_retarget_blocked"] = omni_retarget_blocked ? 1 : 0;
     data["omni_retarget_remaining_ms"] = omni_retarget_remaining_ms;
@@ -663,10 +735,19 @@ int main(int argc, char * argv[])
         main_img, fmt::format("omni retarget cd {:.0f}ms", omni_retarget_remaining_ms), {10, 210},
         omni_retarget_blocked ? cv::Scalar(0, 180, 255) : cv::Scalar(255, 220, 0), 0.8, 2);
     }
+    if (omni_cmd_timeout_active || omni_cmd_timed_out) {
+      tools::draw_text(
+        main_img,
+        fmt::format(
+          "omni cmd timeout {:.0f}/{:.0f}ms hit={}", omni_cmd_elapsed_ms,
+          omni_command_timeout_s * 1e3, omni_cmd_timed_out ? 1 : 0),
+        {10, 240}, omni_cmd_timed_out ? cv::Scalar(0, 120, 255) : cv::Scalar(180, 255, 180), 0.8,
+        2);
+    }
     if (omni_candidate_delta_deg.has_value()) {
       tools::draw_text(
         main_img, fmt::format("omni candidate delta={:.1f} deg", omni_candidate_delta_deg.value()),
-        {10, 240}, {255, 255, 0}, 0.8, 2);
+        {10, 270}, {255, 255, 0}, 0.8, 2);
     }
     if (omni_selected_slot.has_value()) {
       tools::draw_text(
@@ -674,17 +755,17 @@ int main(int argc, char * argv[])
         fmt::format(
           "slot={} pri={} conf={:.2f}", omni_selected_slot.value(),
           omni_selected_priority.value_or(0), omni_selected_confidence.value_or(0.0)),
-        {10, 270}, {180, 255, 180}, 0.8, 2);
+        {10, 300}, {180, 255, 180}, 0.8, 2);
     }
     tools::draw_text(
       main_img, fmt::format("block={} same={}", omni_block_reason, omni_same_target_continuation ? 1 : 0),
-      {10, 300}, {180, 220, 255}, 0.8, 2);
+      {10, 330}, {180, 220, 255}, 0.8, 2);
     if (omni_target_error_deg.has_value()) {
       tools::draw_text(
         main_img,
         fmt::format(
           "omni target err={:.1f} reached={}", omni_target_error_deg.value(), omni_target_reached ? 1 : 0),
-        {10, 330}, {180, 255, 180}, 0.8, 2);
+        {10, 360}, {180, 255, 180}, 0.8, 2);
     }
 
     cv::Mat left_show = left_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : left_img.clone();
@@ -692,7 +773,7 @@ int main(int argc, char * argv[])
       right_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : right_img.clone();
     cv::Mat back_show = back_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : back_img.clone();
 
-    tools::draw_text(main_img, "MAIN (AUTO AIM)", {10, 360}, {0, 255, 0}, 0.8, 2);
+    tools::draw_text(main_img, "MAIN (AUTO AIM)", {10, 390}, {0, 255, 0}, 0.8, 2);
     tools::draw_text(
       left_show, fmt::format("{} ({:.0f} deg)", slot_name(left_cam_cfg.spec.slot), left_cam_cfg.spec.center_yaw_deg),
       {10, 30}, left_cam_cfg.color, 0.8, 2);
