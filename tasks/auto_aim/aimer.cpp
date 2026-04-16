@@ -164,7 +164,6 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   const auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
   const auto vyaw = ekf_x[7];
   const auto abs_vyaw = std::abs(vyaw);
-  const double rear_reject_angle = 100.0 / 57.3;
 
   auto choose_min_swing_id = [&](const std::vector<int> & ids) -> int {
     int best_id = ids.front();
@@ -178,6 +177,57 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     }
     return best_id;
   };
+
+  std::vector<double> delta_angle_list;
+  for (size_t i = 0; i < armor_num; ++i) {
+    delta_angle_list.emplace_back(tools::limit_rad(armor_xyza_list[i][3] - center_yaw));
+  }
+
+  if (target.name != ArmorName::outpost) {
+    if (abs_vyaw <= decision_speed_) {
+      std::vector<int> id_list;
+      for (size_t i = 0; i < armor_num; ++i) {
+        if (std::abs(delta_angle_list[i]) > 60.0 / 57.3) continue;
+        id_list.push_back(static_cast<int>(i));
+      }
+
+      if (id_list.empty()) {
+        lock_id_ = -1;
+        return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+      }
+
+      if (id_list.size() > 1) {
+        const int id0 = id_list[0];
+        const int id1 = id_list[1];
+        if (lock_id_ != id0 && lock_id_ != id1) {
+          lock_id_ =
+            (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
+        }
+        return make_point(true, armor_xyza_list[lock_id_], lock_id_, SRC_DIRECT_LOCKED);
+      }
+
+      lock_id_ = -1;
+      return make_point(true, armor_xyza_list[id_list[0]], id_list[0], SRC_DIRECT_MIN_SWING);
+    }
+
+    lock_id_ = -1;
+    double coming_angle = comming_angle_;
+    double leaving_angle = leaving_angle_;
+    for (size_t i = 0; i < armor_num; ++i) {
+      if (std::abs(delta_angle_list[i]) > coming_angle) continue;
+      if (vyaw > 0 && delta_angle_list[i] < leaving_angle) {
+        return make_point(
+          true, armor_xyza_list[i], static_cast<int>(i), SRC_DIRECT_MIN_SWING);
+      }
+      if (vyaw < 0 && delta_angle_list[i] > -leaving_angle) {
+        return make_point(
+          true, armor_xyza_list[i], static_cast<int>(i), SRC_DIRECT_MIN_SWING);
+      }
+    }
+
+    return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+  }
+
   auto contains_id = [&](const std::vector<int> & ids, int id) -> bool {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
   };
@@ -194,11 +244,6 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     return best_id;
   };
 
-  std::vector<double> delta_angle_list;
-  for (size_t i = 0; i < armor_num; ++i) {
-    delta_angle_list.emplace_back(tools::limit_rad(armor_xyza_list[i][3] - center_yaw));
-  }
-
   double coming_angle = comming_angle_;
   double leaving_angle = leaving_angle_;
   if (target.name == ArmorName::outpost) {
@@ -212,137 +257,11 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     obs_fresh ? target.last_observed_armor_xyza() : Eigen::Vector4d::Zero();
   const int obs_match_id = obs_fresh ? closest_id_to_obs(obs_xyza) : -1;
 
-  if (target.name != ArmorName::outpost && abs_vyaw <= decision_speed_) {
-    int obs_direct_id = -1;
-    if (obs_fresh) {
-      if (abs_vyaw < 0.9) {
-        obs_direct_id = obs_match_id;
-      }
-      const double obs_delta = tools::limit_rad(obs_xyza[3] - center_yaw);
-      const double obs_visible_delta = std::abs(obs_delta);
-      bool direction_ok = true;
-      if (abs_vyaw > 0.4) {
-        direction_ok =
-          (vyaw > 0 && obs_delta < leaving_angle) || (vyaw < 0 && obs_delta > -leaving_angle);
-      }
-      if (
-        std::abs(obs_delta) <= coming_angle && obs_visible_delta <= rear_reject_angle &&
-        direction_ok)
-      {
-        obs_direct_id = obs_match_id;
-      }
-    }
-
-    std::vector<int> direct_ids;
-    for (size_t i = 0; i < armor_num; ++i) {
-      if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-      const double visible_delta =
-        std::abs(tools::limit_rad(armor_xyza_list[i][3] - center_yaw));
-      if (visible_delta > rear_reject_angle) continue;
-      direct_ids.push_back(static_cast<int>(i));
-    }
-
-    if (direct_ids.empty()) {
-      std::vector<int> legacy_ids;
-      for (size_t i = 0; i < armor_num; ++i) {
-        if (std::abs(delta_angle_list[i]) <= coming_angle) {
-          legacy_ids.push_back(static_cast<int>(i));
-        }
-      }
-
-      lock_id_ = -1;
-      if (!legacy_ids.empty()) {
-        const int chosen = choose_min_swing_id(legacy_ids);
-        return make_point(true, armor_xyza_list[chosen], chosen, SRC_DIRECT_MIN_SWING);
-      }
-      return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
-    }
-
-    if (abs_vyaw > 0.4) {
-      std::vector<int> direction_preferred;
-      for (int id : direct_ids) {
-        if (vyaw > 0 && delta_angle_list[id] < leaving_angle) direction_preferred.push_back(id);
-        if (vyaw < 0 && delta_angle_list[id] > -leaving_angle) direction_preferred.push_back(id);
-      }
-      if (!direction_preferred.empty()) direct_ids.swap(direction_preferred);
-    }
-
-    constexpr double kLockSwitchMargin = 6.0 / 57.3;
-    constexpr double kLockComingMargin = 6.0 / 57.3;
-    constexpr double kLockRearMargin = 8.0 / 57.3;
-    constexpr double kLockLeavingMargin = 4.0 / 57.3;
-
-    auto swing_cost = [&](int id) {
-      return std::abs(tools::limit_rad(armor_xyza_list[id][3] - center_yaw));
-    };
-    auto lock_retainable = [&](int id) {
-      if (id < 0 || id >= static_cast<int>(armor_num) || !contains_id(direct_ids, id)) return false;
-      const double delta = delta_angle_list[id];
-      const double visible_delta =
-        std::abs(tools::limit_rad(armor_xyza_list[id][3] - center_yaw));
-      if (coming_angle - std::abs(delta) < kLockComingMargin) return false;
-      if (rear_reject_angle - visible_delta < kLockRearMargin) return false;
-      if (abs_vyaw > 0.4) {
-        if (vyaw > 0 && delta > leaving_angle - kLockLeavingMargin) return false;
-        if (vyaw < 0 && delta < -leaving_angle + kLockLeavingMargin) return false;
-      }
-      return true;
-    };
-
-    int preferred_id = -1;
-    int preferred_source = SRC_DIRECT_MIN_SWING;
-    if (obs_direct_id >= 0 && contains_id(direct_ids, obs_direct_id)) {
-      preferred_id = obs_direct_id;
-      preferred_source = SRC_OBSERVED_DIRECT;
-    } else if (
-      target.last_id >= 0 && target.last_id < static_cast<int>(armor_num) &&
-      contains_id(direct_ids, target.last_id))
-    {
-      preferred_id = target.last_id;
-      preferred_source = SRC_DIRECT_LAST_ID;
-    } else if (obs_match_id >= 0 && contains_id(direct_ids, obs_match_id)) {
-      preferred_id = obs_match_id;
-      preferred_source = SRC_DIRECT_OBS_MATCH;
-    } else {
-      preferred_id = choose_min_swing_id(direct_ids);
-      preferred_source = SRC_DIRECT_MIN_SWING;
-    }
-
-    if (!lock_retainable(lock_id_)) lock_id_ = -1;
-
-    int chosen_id = preferred_id;
-    int chosen_source = preferred_source;
-    if (lock_id_ >= 0 && lock_retainable(lock_id_)) {
-      if (preferred_id != lock_id_) {
-        const double lock_cost = swing_cost(lock_id_);
-        const double preferred_cost = swing_cost(preferred_id);
-        if (abs_vyaw < 1.2 || lock_cost <= preferred_cost + kLockSwitchMargin) {
-          chosen_id = lock_id_;
-          chosen_source = SRC_DIRECT_LOCKED;
-        } else {
-          lock_id_ = preferred_id;
-        }
-      } else {
-        chosen_id = lock_id_;
-        chosen_source = SRC_DIRECT_LOCKED;
-      }
-    } else if (lock_retainable(preferred_id)) {
-      lock_id_ = preferred_id;
-    }
-
-    return make_point(true, armor_xyza_list[chosen_id], chosen_id, chosen_source);
-  }
-
   lock_id_ = -1;
 
   std::vector<int> direct_ids;
   for (size_t i = 0; i < armor_num; ++i) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-    if (target.name != ArmorName::outpost) {
-      const double visible_delta =
-        std::abs(tools::limit_rad(armor_xyza_list[i][3] - center_yaw));
-      if (visible_delta > rear_reject_angle) continue;
-    }
     if (vyaw > 0 && delta_angle_list[i] < leaving_angle) direct_ids.push_back(static_cast<int>(i));
     if (vyaw < 0 && delta_angle_list[i] > -leaving_angle) direct_ids.push_back(static_cast<int>(i));
     if (abs_vyaw < 1e-3) direct_ids.push_back(static_cast<int>(i));
