@@ -161,9 +161,13 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     return make_point(true, armor_xyza_list[0], 0, SRC_SINGLE_FIXED);
   }
 
+  if (target.name != ArmorName::outpost && !target.jumped) {
+    lock_id_ = -1;
+    return make_point(true, armor_xyza_list[0], 0, SRC_SINGLE_FIXED);
+  }
+
   const auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
   const auto vyaw = ekf_x[7];
-  const auto abs_vyaw = std::abs(vyaw);
 
   auto choose_min_swing_id = [&](const std::vector<int> & ids) -> int {
     int best_id = ids.front();
@@ -184,48 +188,28 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   }
 
   if (target.name != ArmorName::outpost) {
-    if (abs_vyaw <= decision_speed_) {
-      std::vector<int> id_list;
-      for (size_t i = 0; i < armor_num; ++i) {
-        if (std::abs(delta_angle_list[i]) > 60.0 / 57.3) continue;
-        id_list.push_back(static_cast<int>(i));
-      }
+    std::vector<int> id_list;
+    for (size_t i = 0; i < armor_num; ++i) {
+      if (std::abs(delta_angle_list[i]) > 60.0 / 57.3) continue;
+      id_list.push_back(static_cast<int>(i));
+    }
 
-      if (id_list.empty()) {
-        lock_id_ = -1;
-        return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
-      }
-
-      if (id_list.size() > 1) {
-        const int id0 = id_list[0];
-        const int id1 = id_list[1];
-        if (lock_id_ != id0 && lock_id_ != id1) {
-          lock_id_ =
-            (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
-        }
-        return make_point(true, armor_xyza_list[lock_id_], lock_id_, SRC_DIRECT_LOCKED);
-      }
-
+    if (id_list.empty()) {
       lock_id_ = -1;
-      return make_point(true, armor_xyza_list[id_list[0]], id_list[0], SRC_DIRECT_MIN_SWING);
+      return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+    }
+
+    if (id_list.size() > 1) {
+      const int id0 = id_list[0];
+      const int id1 = id_list[1];
+      if (lock_id_ != id0 && lock_id_ != id1) {
+        lock_id_ = (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
+      }
+      return make_point(true, armor_xyza_list[lock_id_], lock_id_, SRC_DIRECT_LOCKED);
     }
 
     lock_id_ = -1;
-    double coming_angle = comming_angle_;
-    double leaving_angle = leaving_angle_;
-    for (size_t i = 0; i < armor_num; ++i) {
-      if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-      if (vyaw > 0 && delta_angle_list[i] < leaving_angle) {
-        return make_point(
-          true, armor_xyza_list[i], static_cast<int>(i), SRC_DIRECT_MIN_SWING);
-      }
-      if (vyaw < 0 && delta_angle_list[i] > -leaving_angle) {
-        return make_point(
-          true, armor_xyza_list[i], static_cast<int>(i), SRC_DIRECT_MIN_SWING);
-      }
-    }
-
-    return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+    return make_point(true, armor_xyza_list[id_list[0]], id_list[0], SRC_DIRECT_MIN_SWING);
   }
 
   auto contains_id = [&](const std::vector<int> & ids, int id) -> bool {
@@ -256,6 +240,7 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   const Eigen::Vector4d obs_xyza =
     obs_fresh ? target.last_observed_armor_xyza() : Eigen::Vector4d::Zero();
   const int obs_match_id = obs_fresh ? closest_id_to_obs(obs_xyza) : -1;
+  const auto abs_vyaw = std::abs(vyaw);
 
   lock_id_ = -1;
 

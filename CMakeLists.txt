@@ -134,6 +134,9 @@ target_link_libraries(ros2_gimbal_big_yaw_lookup_test ${OpenCV_LIBS} fmt::fmt to
 add_executable(outpost_auto_aim_logic_test tests/outpost_auto_aim_logic_test.cpp)
 target_link_libraries(outpost_auto_aim_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
+add_executable(normal_auto_aim_v2_logic_test tests/normal_auto_aim_v2_logic_test.cpp)
+target_link_libraries(normal_auto_aim_v2_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
 add_executable(pattern_geometry_test tests/pattern_geometry_test.cpp)
 target_link_libraries(pattern_geometry_test ${OpenCV_LIBS})
 

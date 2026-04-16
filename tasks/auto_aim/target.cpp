@@ -213,36 +213,33 @@ int Target::match_default_armor_id(
 {
   if (xyza_list.empty()) return 0;
 
-  const int prev_id = std::clamp(last_id, 0, armor_num_ - 1);
-  const auto cyclic_id_distance = [&](int a, int b) -> int {
-    const int diff = std::abs(a - b);
-    return std::min(diff, armor_num_ - diff);
-  };
+  std::vector<std::pair<Eigen::Vector4d, int>> xyza_i_list;
+  xyza_i_list.reserve(xyza_list.size());
+  for (int i = 0; i < armor_num_; ++i) {
+    xyza_i_list.push_back({xyza_list[i], i});
+  }
 
-  double min_score = std::numeric_limits<double>::infinity();
+  std::sort(
+    xyza_i_list.begin(), xyza_i_list.end(),
+    [](const std::pair<Eigen::Vector4d, int> & a, const std::pair<Eigen::Vector4d, int> & b) {
+      const Eigen::Vector3d ypd1 = tools::xyz2ypd(a.first.head(3));
+      const Eigen::Vector3d ypd2 = tools::xyz2ypd(b.first.head(3));
+      return ypd1[2] < ypd2[2];
+    });
+
   int best_id = 0;
-
-  for (int i = 0; i < armor_num_; i++) {
-    const auto & xyza = xyza_list[i];
+  double min_angle_error = std::numeric_limits<double>::infinity();
+  const int candidates = std::min<int>(3, xyza_i_list.size());
+  for (int i = 0; i < candidates; ++i) {
+    const auto & xyza = xyza_i_list[i].first;
     const Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
-    const double yaw_error = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3]));
-    const double bearing_error = std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
-    const double dist_error = std::abs(armor.ypd_in_world[2] - ypd[2]);
+    const double angle_error =
+      std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3])) +
+      std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
 
-    double score = yaw_error + bearing_error + 0.2 * dist_error;
-    if (update_count_ > 0) {
-      score += 0.20 * static_cast<double>(cyclic_id_distance(i, prev_id));
-    }
-
-    if (name != ArmorName::outpost) {
-      const double candidate_center_yaw = std::atan2(xyza[1], xyza[0]);
-      const double candidate_delta = std::abs(tools::limit_rad(xyza[3] - candidate_center_yaw));
-      if (candidate_delta > 100.0 / 57.3) score += 0.8;
-    }
-
-    if (score < min_score) {
-      best_id = i;
-      min_score = score;
+    if (angle_error < min_angle_error) {
+      best_id = xyza_i_list[i].second;
+      min_angle_error = angle_error;
     }
   }
 

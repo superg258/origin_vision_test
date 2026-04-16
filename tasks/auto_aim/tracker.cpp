@@ -286,6 +286,17 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
 {
   target_.predict(t);
 
+  if (target_.name != ArmorName::outpost) {
+    int found_count = 0;
+    for (auto & armor : armors) {
+      if (armor.name != target_.name || armor.type != target_.armor_type) continue;
+      found_count++;
+      solver_.solve(armor);
+      target_.update(armor);
+    }
+    return found_count > 0;
+  }
+
   std::vector<Armor *> candidates;
   candidates.reserve(armors.size());
   for (auto & armor : armors) {
