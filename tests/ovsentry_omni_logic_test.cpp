@@ -58,14 +58,28 @@ int main()
 {
   const auto now = std::chrono::steady_clock::now();
   const double retarget_min_delta_deg = 20.0;
+  const double current_abs_yaw_deg = 0.0;
 
   {
     const auto candidate = make_candidate(
       omniperception::OmniCameraSlot::left, auto_aim::ArmorName::one,
       auto_aim::ArmorPriority::first, 0.7, 15.0, now);
     const auto decision = omniperception::evaluate_omni_retarget(
-      candidate, std::nullopt, true, retarget_min_delta_deg);
+      candidate, std::nullopt, current_abs_yaw_deg / 57.3, false, retarget_min_delta_deg);
     if (!expect(decision.accept, "candidate without accepted target should be accepted")) return 1;
+  }
+
+  {
+    const auto candidate = make_candidate(
+      omniperception::OmniCameraSlot::left, auto_aim::ArmorName::one,
+      auto_aim::ArmorPriority::first, 0.7, 35.0, now);
+    const auto decision = omniperception::evaluate_omni_retarget(
+      candidate, std::nullopt, current_abs_yaw_deg / 57.3, false, retarget_min_delta_deg);
+    if (!expect(
+          omniperception::should_start_omni_retarget_cooldown(decision, retarget_min_delta_deg),
+          "first large retarget should start cooldown")) {
+      return 1;
+    }
   }
 
   {
@@ -76,8 +90,8 @@ int main()
       omniperception::OmniCameraSlot::left, auto_aim::ArmorName::one,
       auto_aim::ArmorPriority::first, 0.6, 42.0, now + 5ms);
     const auto decision = omniperception::evaluate_omni_retarget(
-      continuation_candidate, make_accepted_target(accepted_candidate), true,
-      retarget_min_delta_deg);
+      continuation_candidate, make_accepted_target(accepted_candidate),
+      current_abs_yaw_deg / 57.3, true, retarget_min_delta_deg);
     if (!expect(decision.accept, "same-target continuation should ignore cooldown")) return 1;
     if (!expect(
           decision.same_target_continuation,
@@ -94,12 +108,70 @@ int main()
       omniperception::OmniCameraSlot::right, auto_aim::ArmorName::three,
       auto_aim::ArmorPriority::first, 0.9, 50.0, now + 5ms);
     const auto decision = omniperception::evaluate_omni_retarget(
-      blocked_candidate, make_accepted_target(accepted_candidate), true,
-      retarget_min_delta_deg);
+      blocked_candidate, make_accepted_target(accepted_candidate),
+      current_abs_yaw_deg / 57.3, true, retarget_min_delta_deg);
     if (!expect(!decision.accept, "large cross-target retarget should be blocked during cooldown")) {
       return 1;
     }
     if (!expect(decision.blocked, "blocked retarget should report blocked=true")) return 1;
+  }
+
+  {
+    const auto cooldown_anchor_candidate = make_candidate(
+      omniperception::OmniCameraSlot::left, auto_aim::ArmorName::one,
+      auto_aim::ArmorPriority::first, 0.8, 30.0, now);
+    const auto cooldown_anchor = make_accepted_target(cooldown_anchor_candidate);
+    const auto reference_target = omniperception::select_omni_retarget_reference_target(
+      std::nullopt, cooldown_anchor, true);
+    if (!expect(reference_target.has_value(), "active cooldown should reuse cooldown anchor target")) {
+      return 1;
+    }
+
+    const auto blocked_candidate = make_candidate(
+      omniperception::OmniCameraSlot::right, auto_aim::ArmorName::three,
+      auto_aim::ArmorPriority::first, 0.9, 70.0, now + 5ms);
+    const auto blocked_decision = omniperception::evaluate_omni_retarget(
+      blocked_candidate, reference_target, current_abs_yaw_deg / 57.3, true, retarget_min_delta_deg);
+    if (!expect(
+          !blocked_decision.accept,
+          "cross-lost cooldown should still block large cross-target retarget")) {
+      return 1;
+    }
+
+    const auto continuation_candidate = make_candidate(
+      omniperception::OmniCameraSlot::left, auto_aim::ArmorName::one,
+      auto_aim::ArmorPriority::first, 0.7, 38.0, now + 10ms);
+    const auto continuation_decision = omniperception::evaluate_omni_retarget(
+      continuation_candidate, reference_target, current_abs_yaw_deg / 57.3, true,
+      retarget_min_delta_deg);
+    if (!expect(
+          continuation_decision.accept && continuation_decision.same_target_continuation,
+          "cross-lost cooldown should still allow same-target continuation")) {
+      return 1;
+    }
+  }
+
+  {
+    const auto cooldown_anchor_candidate = make_candidate(
+      omniperception::OmniCameraSlot::left, auto_aim::ArmorName::one,
+      auto_aim::ArmorPriority::first, 0.8, 30.0, now);
+    const auto reference_target = omniperception::select_omni_retarget_reference_target(
+      std::nullopt, make_accepted_target(cooldown_anchor_candidate), false);
+    if (!expect(!reference_target.has_value(), "expired cooldown should not keep reference target")) {
+      return 1;
+    }
+
+    const auto candidate = make_candidate(
+      omniperception::OmniCameraSlot::right, auto_aim::ArmorName::three,
+      auto_aim::ArmorPriority::first, 0.9, 55.0, now + 5ms);
+    const auto decision = omniperception::evaluate_omni_retarget(
+      candidate, reference_target, current_abs_yaw_deg / 57.3, false, retarget_min_delta_deg);
+    if (!expect(decision.accept, "candidate should be accepted after cooldown expires")) return 1;
+    if (!expect(
+          omniperception::should_start_omni_retarget_cooldown(decision, retarget_min_delta_deg),
+          "accepted large retarget after cooldown expiry should start a new cooldown")) {
+      return 1;
+    }
   }
 
   {

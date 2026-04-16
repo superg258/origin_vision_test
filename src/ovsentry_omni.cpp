@@ -360,7 +360,8 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point main_timestamp;
   std::chrono::steady_clock::time_point ts_left, ts_right, ts_back;
   std::optional<io::Command> omni_hold_command;
-  std::optional<omniperception::AcceptedOmniTarget> accepted_omni_target;
+  std::optional<omniperception::AcceptedOmniTarget> session_accepted_omni_target;
+  std::optional<omniperception::AcceptedOmniTarget> cooldown_anchor_omni_target;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   bool prev_omni_mode = false;
   int frame_count = 0;
@@ -419,14 +420,17 @@ int main(int argc, char * argv[])
     double omni_retarget_remaining_ms = 0.0;
     const auto now = std::chrono::steady_clock::now();
 
+    if (cooldown_anchor_omni_target.has_value() && now >= omni_retarget_cooldown_deadline) {
+      cooldown_anchor_omni_target.reset();
+      omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+    }
+
     if (omni_mode && !prev_omni_mode) {
       omni_hold_command.reset();
-      accepted_omni_target.reset();
-      omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+      session_accepted_omni_target.reset();
     } else if (!omni_mode && prev_omni_mode) {
       omni_hold_command.reset();
-      accepted_omni_target.reset();
-      omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+      session_accepted_omni_target.reset();
     }
 
     if (omni_mode) {
@@ -486,11 +490,13 @@ int main(int argc, char * argv[])
       finalize_frame(back_frame, back_cam_cfg, tools::delta_time(t_omni3, t_omni2) * 1e3);
 
       omni_retarget_cd_active =
-        accepted_omni_target.has_value() && now < omni_retarget_cooldown_deadline;
+        cooldown_anchor_omni_target.has_value() && now < omni_retarget_cooldown_deadline;
       if (omni_retarget_cd_active) {
         omni_retarget_remaining_ms =
           std::chrono::duration<double, std::milli>(omni_retarget_cooldown_deadline - now).count();
       }
+      const auto reference_omni_target = omniperception::select_omni_retarget_reference_target(
+        session_accepted_omni_target, cooldown_anchor_omni_target, omni_retarget_cd_active);
 
       std::vector<OmniCandidateFrame> candidate_frames;
       if (left_frame.candidate.has_value()) candidate_frames.push_back(left_frame);
@@ -504,7 +510,7 @@ int main(int argc, char * argv[])
       }
 
       const auto selected_candidate = omniperception::select_omni_candidate(
-        candidates, accepted_omni_target, gimbal_state.big_yaw, omni_retarget_min_delta_deg);
+        candidates, reference_omni_target, gimbal_state.big_yaw, omni_retarget_min_delta_deg);
       if (selected_candidate.has_value()) {
         omni_candidate_abs_yaw_deg = selected_candidate->abs_yaw_rad * 57.3;
         omni_candidate_base_big_yaw_deg = selected_candidate->base_big_yaw_rad * 57.3;
@@ -524,27 +530,27 @@ int main(int argc, char * argv[])
         }
 
         const auto decision = omniperception::evaluate_omni_retarget(
-          selected_candidate.value(), accepted_omni_target, omni_retarget_cd_active,
-          omni_retarget_min_delta_deg);
+          selected_candidate.value(), reference_omni_target, gimbal_state.big_yaw,
+          omni_retarget_cd_active, omni_retarget_min_delta_deg);
         omni_candidate_delta_deg = decision.candidate_delta_deg;
         omni_same_target_continuation = decision.same_target_continuation;
 
         if (decision.accept) {
           command = selected_candidate->command;
           omni_hold_command = command;
-          const bool has_last_target = accepted_omni_target.has_value();
-          const bool starts_new_cooldown =
-            has_last_target && !decision.same_target_continuation &&
-            decision.candidate_delta_deg >= omni_retarget_min_delta_deg;
-          accepted_omni_target = make_accepted_omni_target(selected_candidate.value());
+          const auto accepted_target = make_accepted_omni_target(selected_candidate.value());
+          session_accepted_omni_target = accepted_target;
           omni_target_abs_yaw_deg = command.big_yaw * 57.3;
-          if (starts_new_cooldown) {
+          if (omniperception::should_start_omni_retarget_cooldown(
+                decision, omni_retarget_min_delta_deg)) {
+            cooldown_anchor_omni_target = accepted_target;
             omni_retarget_cooldown_deadline = now + omni_retarget_cooldown;
             omni_retarget_cd_active = true;
             omni_retarget_remaining_ms = omni_retarget_cooldown_s * 1e3;
           }
-        } else if (accepted_omni_target.has_value()) {
-          command = accepted_omni_target->command;
+        } else if (reference_omni_target.has_value()) {
+          command = reference_omni_target->command;
+          omni_hold_command = command;
           omni_target_abs_yaw_deg = command.big_yaw * 57.3;
           omni_retarget_blocked = true;
           omni_block_reason = decision.block_reason;
@@ -627,7 +633,7 @@ int main(int argc, char * argv[])
     plotter.plot(data);
 
     prev_omni_mode = omni_mode;
-    if (display) continue;
+    if (!display) continue;
 
     tools::draw_text(main_img, fmt::format("[{}]", tracker_state), {10, 30}, {255, 255, 255}, 0.8, 2);
     tools::draw_text(
