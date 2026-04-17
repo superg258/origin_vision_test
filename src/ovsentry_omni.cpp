@@ -144,6 +144,25 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
     {10, 90}, result.cam.color, 0.7, 2);
 }
 
+void draw_auto_aim_overlay(
+  cv::Mat & img, const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
+  const auto_aim::Solver & solver)
+{
+  if (targets.empty()) return;
+
+  const auto & target = targets.front();
+  for (const auto & xyza : target.armor_xyza_list()) {
+    const auto image_points =
+      solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
+    tools::draw_points(img, image_points, {0, 255, 0});
+  }
+
+  const auto & aim_point = aimer.debug_aim_point;
+  const auto aim_image_points =
+    solver.reproject_armor(aim_point.xyza.head(3), aim_point.xyza[3], target.armor_type, target.name);
+  tools::draw_points(img, aim_image_points, aim_point.valid ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0));
+}
+
 cv::Mat resize_for_view(const cv::Mat & img)
 {
   cv::Mat resized;
@@ -706,6 +725,8 @@ int main(int argc, char * argv[])
 
     prev_omni_mode = omni_mode;
     if (!display) continue;
+
+    draw_auto_aim_overlay(main_img, targets, aimer, solver);
 
     tools::draw_text(main_img, fmt::format("[{}]", tracker_state), {10, 30}, {255, 255, 255}, 0.8, 2);
     tools::draw_text(
