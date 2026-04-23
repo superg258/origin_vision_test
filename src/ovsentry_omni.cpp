@@ -308,12 +308,17 @@ int main(int argc, char * argv[])
     yaml["omni_hold_release_tolerance_deg"] ? yaml["omni_hold_release_tolerance_deg"].as<double>() : 3.0;
   const double omni_command_timeout_s =
     yaml["omni_command_timeout_s"] ? yaml["omni_command_timeout_s"].as<double>() : 0.5;
+  const double main_lost_cmd_hold_s =
+    yaml["main_lost_cmd_hold_s"] ? yaml["main_lost_cmd_hold_s"].as<double>() : 0.0;
   const auto omni_read_timeout = std::chrono::milliseconds(
     std::max(1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
   const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_retarget_cooldown_s));
   const auto omni_command_timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_command_timeout_s));
+  const auto main_lost_cmd_hold_duration =
+    std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(main_lost_cmd_hold_s));
 
   tools::logger()->info(
     "[OVSentryOmni] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
@@ -392,12 +397,15 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point main_timestamp;
   std::chrono::steady_clock::time_point ts_left, ts_right, ts_back;
   std::optional<io::Command> omni_hold_command;
+  std::optional<io::Command> last_main_tracking_command;
   std::optional<omniperception::AcceptedOmniTarget> session_accepted_omni_target;
   std::optional<omniperception::AcceptedOmniTarget> cooldown_anchor_omni_target;
   std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
+  std::chrono::steady_clock::time_point main_lost_cmd_hold_deadline{};
   bool active_omni_timeout_running = false;
+  bool main_lost_cmd_hold_running = false;
   bool prev_omni_mode = false;
   int frame_count = 0;
 
@@ -453,9 +461,11 @@ int main(int argc, char * argv[])
     bool omni_target_reached = false;
     bool omni_cmd_timeout_active = false;
     bool omni_cmd_timed_out = false;
+    bool main_lost_cmd_hold_applied = false;
     std::string omni_block_reason = "none";
     double omni_cmd_elapsed_ms = 0.0;
     double omni_retarget_remaining_ms = 0.0;
+    double main_lost_cmd_hold_remaining_ms = 0.0;
     const auto now = std::chrono::steady_clock::now();
 
     auto clear_omni_timeout_session = [&]() {
@@ -479,8 +489,17 @@ int main(int argc, char * argv[])
 
     if (omni_mode && !prev_omni_mode) {
       clear_omni_redirect_state();
+      if (main_lost_cmd_hold_duration > std::chrono::steady_clock::duration::zero() &&
+          last_main_tracking_command.has_value()) {
+        main_lost_cmd_hold_deadline = now + main_lost_cmd_hold_duration;
+        main_lost_cmd_hold_running = true;
+      } else {
+        main_lost_cmd_hold_running = false;
+      }
     } else if (!omni_mode && prev_omni_mode) {
       clear_omni_redirect_state();
+      main_lost_cmd_hold_running = false;
+      main_lost_cmd_hold_deadline = std::chrono::steady_clock::time_point{};
     }
 
     if (omni_mode) {
@@ -656,6 +675,19 @@ int main(int argc, char * argv[])
       } else {
         clear_omni_timeout_session();
       }
+
+      if (!command.control && main_lost_cmd_hold_running && last_main_tracking_command.has_value()) {
+        if (now < main_lost_cmd_hold_deadline) {
+          command = last_main_tracking_command.value();
+          main_lost_cmd_hold_applied = true;
+          main_lost_cmd_hold_remaining_ms =
+            std::chrono::duration<double, std::milli>(main_lost_cmd_hold_deadline - now).count();
+        } else {
+          main_lost_cmd_hold_running = false;
+          main_lost_cmd_hold_deadline = std::chrono::steady_clock::time_point{};
+          last_main_tracking_command.reset();
+        }
+      }
     } else {
       left_img.release();
       right_img.release();
@@ -665,6 +697,11 @@ int main(int argc, char * argv[])
       if (tracker_state == "tracking" && command.control && !targets.empty()) {
         apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
       }
+      if (command.control) {
+        last_main_tracking_command = command;
+      }
+      main_lost_cmd_hold_running = false;
+      main_lost_cmd_hold_deadline = std::chrono::steady_clock::time_point{};
     }
 
     command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
@@ -713,6 +750,8 @@ int main(int argc, char * argv[])
     data["omni_retarget_cd_active"] = omni_retarget_cd_active ? 1 : 0;
     data["omni_retarget_blocked"] = omni_retarget_blocked ? 1 : 0;
     data["omni_retarget_remaining_ms"] = omni_retarget_remaining_ms;
+    data["main_lost_cmd_hold_active"] = main_lost_cmd_hold_applied ? 1 : 0;
+    data["main_lost_cmd_hold_remaining_ms"] = main_lost_cmd_hold_remaining_ms;
     data["omni_same_target_continuation"] = omni_same_target_continuation ? 1 : 0;
     data["omni_block_reason"] = omni_block_reason;
     if (omni_candidate_delta_deg.has_value()) data["omni_candidate_delta_deg"] = omni_candidate_delta_deg.value();
