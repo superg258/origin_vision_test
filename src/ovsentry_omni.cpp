@@ -417,7 +417,7 @@ int main(int argc, char * argv[])
 
     Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
     solver.set_R_gimbal2world(q);
-    recorder.record(main_img, q, main_timestamp);
+    //recorder.record(main_img, q, main_timestamp);
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
     const auto gimbal_state = gimbal->state();

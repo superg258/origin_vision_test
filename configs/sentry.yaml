@@ -47,7 +47,7 @@ omni_fov_v_deg: 67.0
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
-exposure_ms: 0.8
+exposure_ms: 4
 gain: 10
 vid_pid: "2bdf:0001"
 
@@ -99,7 +99,7 @@ low_speed_delay_time: 0.065 # s
 
 #####-----shooter参数-----#####
 first_tolerance: 5 # 近距离射击容差，degree
-second_tolerance: 2 # 远距离射击容差，degree
+second_tolerance: 5 # 远距离射击容差，degree
 judge_distance: 3 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 high_spin_force_fire_enabled: true

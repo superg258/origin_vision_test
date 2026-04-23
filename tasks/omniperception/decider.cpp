@@ -52,7 +52,7 @@ bool armor_filter_with_config(
   if (armors.empty()) return true;
   armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color; });
   armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::five; });
-  armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::outpost; });
+  //armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::outpost; });
   armors.remove_if([&](const auto_aim::Armor & a) {
     return std::find(invincible_armor.begin(), invincible_armor.end(), a.name) != invincible_armor.end();
   });
