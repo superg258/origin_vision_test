@@ -6,6 +6,7 @@
 #include <list>
 #include <optional>
 #include <string>
+#include <map>
 
 #include "armor.hpp"
 #include "solver.hpp"
@@ -58,6 +59,11 @@ private:
   Target target_;
   std::chrono::steady_clock::time_point last_timestamp_;
   ArmorPriority omni_target_priority_;
+  std::map<ArmorName, ArmorPriority> armor_priority_;
+
+  void apply_priority(std::list<Armor> & armors) const;
+
+  void sort_armors(std::list<Armor> & armors) const;
 
   void state_machine(bool found);
 

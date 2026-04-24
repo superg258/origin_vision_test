@@ -3,8 +3,10 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <tuple>
 #include <vector>
 
@@ -13,6 +15,61 @@
 
 namespace auto_aim
 {
+namespace
+{
+std::string normalize_priority_key(std::string key)
+{
+  std::string normalized;
+  normalized.reserve(key.size());
+  for (unsigned char ch : key) {
+    if (ch == '_' || ch == '-' || ch == ' ') continue;
+    normalized.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  return normalized;
+}
+
+std::optional<ArmorName> armor_name_from_priority_key(const std::string & raw_key)
+{
+  const auto key = normalize_priority_key(raw_key);
+
+  if (key == "1" || key == "one" || key == "hero" || raw_key == "英雄") {
+    return ArmorName::one;
+  }
+  if (key == "2" || key == "two" || key == "engineer" || raw_key == "工程") {
+    return ArmorName::two;
+  }
+  if (key == "3" || key == "three" || key == "infantry3" || raw_key == "步兵3") {
+    return ArmorName::three;
+  }
+  if (key == "4" || key == "four" || key == "infantry4" || raw_key == "步兵4") {
+    return ArmorName::four;
+  }
+  if (key == "5" || key == "five" || key == "infantry5" || raw_key == "步兵5") {
+    return ArmorName::five;
+  }
+  if (key == "sentry" || raw_key == "哨兵") {
+    return ArmorName::sentry;
+  }
+  if (key == "outpost" || raw_key == "前哨站") {
+    return ArmorName::outpost;
+  }
+  if (key == "base" || raw_key == "基地") {
+    return ArmorName::base;
+  }
+  if (key == "notarmor" || raw_key == "非装甲") {
+    return ArmorName::not_armor;
+  }
+
+  return std::nullopt;
+}
+
+ArmorPriority armor_priority_from_yaml_value(const YAML::Node & node)
+{
+  const int priority = std::max(1, node.as<int>());
+  return static_cast<ArmorPriority>(priority);
+}
+}  // namespace
+
 std::optional<double> omni_switch_match_delta_deg(
   ArmorName armor_name, ArmorPriority priority, const Eigen::Vector3d & xyz_in_world,
   const OmniSwitchConstraint & constraint)
@@ -30,7 +87,13 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   state_{"lost"},
   pre_state_{"lost"},
   last_timestamp_(std::chrono::steady_clock::now()),
-  omni_target_priority_{ArmorPriority::fifth}
+  omni_target_priority_{ArmorPriority::fifth},
+  armor_priority_{
+    {ArmorName::one, ArmorPriority::fifth},     {ArmorName::two, ArmorPriority::fifth},
+    {ArmorName::three, ArmorPriority::fifth},   {ArmorName::four, ArmorPriority::fifth},
+    {ArmorName::five, ArmorPriority::fifth},    {ArmorName::sentry, ArmorPriority::fifth},
+    {ArmorName::outpost, ArmorPriority::fifth}, {ArmorName::base, ArmorPriority::fifth},
+    {ArmorName::not_armor, ArmorPriority::fifth}}
 {
   auto yaml = YAML::LoadFile(config_path);
   enemy_color_ = (yaml["enemy_color"].as<std::string>() == "red") ? Color::red : Color::blue;
@@ -38,6 +101,35 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
+
+  YAML::Node priority_yaml;
+  bool has_priority_yaml = false;
+  if (yaml["armor_priority"].IsDefined()) {
+    priority_yaml = yaml["armor_priority"];
+    has_priority_yaml = true;
+  } else if (yaml["target_priority"].IsDefined()) {
+    priority_yaml = yaml["target_priority"];
+    has_priority_yaml = true;
+  } else if (yaml["fire_priority"].IsDefined()) {
+    priority_yaml = yaml["fire_priority"];
+    has_priority_yaml = true;
+  }
+
+  if (has_priority_yaml) {
+    if (!priority_yaml.IsMap()) {
+      tools::logger()->warn("[Tracker] armor_priority should be a YAML map.");
+    } else {
+      for (const auto & item : priority_yaml) {
+        const auto key = item.first.as<std::string>();
+        const auto armor_name = armor_name_from_priority_key(key);
+        if (!armor_name.has_value()) {
+          tools::logger()->warn("[Tracker] Unknown armor priority key: {}", key);
+          continue;
+        }
+        armor_priority_[armor_name.value()] = armor_priority_from_yaml_value(item.second);
+      }
+    }
+  }
 }
 
 std::string Tracker::state() const { return state_; }
@@ -63,21 +155,17 @@ std::list<Target> Tracker::track(
   //            solver_.oupost_reprojection_error(a, -15 * CV_PI / 180.0);
   // });
 
-  // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
-    auto distance_1 = cv::norm(a.center - img_center);
-    auto distance_2 = cv::norm(b.center - img_center);
-    return distance_1 < distance_2;
-  });
-
-  // 按优先级排序，优先级最高在首位(优先级越高数字越小，1的优先级最高)
-  armors.sort(
-    [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
+  sort_armors(armors);
 
   bool found;
   if (state_ == "lost") {
     found = set_target(armors, t);
+  }
+
+  // 此时主相机画面中出现了优先级更高的装甲板，切换目标
+  else if (state_ == "tracking" && !armors.empty() && armors.front().priority < target_.priority) {
+    found = set_target(armors, t);
+    tools::logger()->debug("auto_aim switch target to {}", ARMOR_NAMES[armors.front().name]);
   }
 
   else {
@@ -120,6 +208,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   temp_target.timestamp = t;
   if (!detection_queue.empty()) {
     temp_target = detection_queue.front();
+    sort_armors(temp_target.armors);
   }
 
   auto dt = tools::delta_time(t, last_timestamp_);
@@ -131,16 +220,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
     state_ = "lost";
   }
 
-  // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
-    auto distance_1 = cv::norm(a.center - img_center);
-    auto distance_2 = cv::norm(b.center - img_center);
-    return distance_1 < distance_2;
-  });
-
-  // 按优先级排序，优先级最高在首位(优先级越高数字越小，1的优先级最高)
-  armors.sort([](const Armor & a, const Armor & b) { return a.priority < b.priority; });
+  sort_armors(armors);
 
   bool found;
   if (state_ == "lost") {
@@ -169,7 +249,9 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
     if (switch_constraint.has_value() && switch_constraint->enabled && switch_constraint->has_abs_yaw) {
       found = false;
       for (auto armor : armors) {
-        if (armor.name != switch_constraint->armor_name || armor.priority != switch_constraint->priority) {
+        if (
+          armor.name != switch_constraint->armor_name ||
+          armor.priority != switch_constraint->priority) {
           continue;
         }
         solver_.solve(armor);
@@ -208,6 +290,31 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
 
   std::list<Target> targets = {target_};
   return {switch_target, targets};
+}
+
+void Tracker::apply_priority(std::list<Armor> & armors) const
+{
+  for (auto & armor : armors) {
+    auto priority_iter = armor_priority_.find(armor.name);
+    armor.priority =
+      priority_iter == armor_priority_.end() ? ArmorPriority::fifth : priority_iter->second;
+  }
+}
+
+void Tracker::sort_armors(std::list<Armor> & armors) const
+{
+  apply_priority(armors);
+
+  // 先按画面中心距离排序；std::list::sort 是稳定排序，后面同优先级时会保留这个顺序。
+  armors.sort([](const Armor & a, const Armor & b) {
+    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO: 可改成从相机配置读取
+    auto distance_1 = cv::norm(a.center - img_center);
+    auto distance_2 = cv::norm(b.center - img_center);
+    return distance_1 < distance_2;
+  });
+
+  // 按开火优先级排序：数字越小，优先级越高；1 最高。
+  armors.sort([](const Armor & a, const Armor & b) { return a.priority < b.priority; });
 }
 
 void Tracker::state_machine(bool found)
