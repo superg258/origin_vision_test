@@ -1,8 +1,15 @@
 #ifndef IO__ROS2_HPP
 #define IO__ROS2_HPP
 
+#include <cstdint>
+
 #include "publish2nav.hpp"
 #include "subscribe2nav.hpp"
+
+namespace auto_aim
+{
+class Target;
+}
 
 namespace io
 {
@@ -13,7 +20,14 @@ public:
 
   ~ROS2();
 
+  // 原协议：x,y,z,yaw
   void publish(const Eigen::Vector4d & target_pos);
+
+  // 新协议：x,y,z,yaw,armor_id,speed
+  void publish(const Eigen::Vector4d & target_pos, int8_t armor_id, double speed);
+
+  // 直接从 Target 的 EKF 状态发布给导航：x,y,z,yaw,armor_id,speed
+  void publish(const auto_aim::Target & target);
 
   std::vector<int8_t> subscribe_enemy_status();
 
