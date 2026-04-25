@@ -101,7 +101,11 @@ int main(int argc, char * argv[])
     /// ROS2通信
     Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
 
-    ros2.publish(target_info);
+    if (!targets.empty()) {
+      ros2.publish(target_info, targets.front());
+    } else {
+      ros2.publish(target_info, -1, 0.0);
+    }
   }
   return 0;
 }

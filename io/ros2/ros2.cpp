@@ -34,16 +34,6 @@ int8_t armor_name_to_nav_id(auto_aim::ArmorName name)
   }
 }
 
-Eigen::Vector4d target_pos_from_ekf(const auto_aim::Target & target)
-{
-  const Eigen::VectorXd x = target.ekf_x();
-  return {
-    x.size() > 0 ? x[0] : 0.0,
-    x.size() > 2 ? x[2] : 0.0,
-    x.size() > 4 ? x[4] : 0.0,
-    x.size() > 6 ? x[6] : 0.0};
-}
-
 double target_speed_from_ekf(const auto_aim::Target & target)
 {
   const Eigen::VectorXd x = target.ekf_x();
@@ -80,10 +70,9 @@ void ROS2::publish(const Eigen::Vector4d & target_pos, int8_t armor_id, double s
   publish2nav_->send_data(target_pos, armor_id, speed);
 }
 
-void ROS2::publish(const auto_aim::Target & target)
+void ROS2::publish(const Eigen::Vector4d & target_pos, const auto_aim::Target & target)
 {
-  publish2nav_->send_data(
-    target_pos_from_ekf(target), armor_name_to_nav_id(target.name), target_speed_from_ekf(target));
+  publish2nav_->send_data(target_pos, armor_name_to_nav_id(target.name), target_speed_from_ekf(target));
 }
 
 std::vector<int8_t> ROS2::subscribe_enemy_status()
