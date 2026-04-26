@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <optional>
@@ -110,6 +111,47 @@ std::pair<double, double> calc_delta_angle_deg(
 double angular_distance_deg(double lhs_rad, double rhs_rad)
 {
   return std::abs(tools::limit_rad(lhs_rad - rhs_rad)) * 57.3;
+}
+
+uint8_t armor_name_to_nav_id(auto_aim::ArmorName name)
+{
+  switch (name) {
+    case auto_aim::ArmorName::one:
+      return 1;   // 英雄
+    case auto_aim::ArmorName::two:
+      return 2;   // 工程
+    case auto_aim::ArmorName::three:
+      return 3;   // 3号步兵
+    case auto_aim::ArmorName::four:
+      return 4;   // 4号步兵
+    case auto_aim::ArmorName::five:
+      return 5;   // 5号步兵
+    // 当前 ArmorName 枚举中没有无人机/飞镖；如果后续新增对应枚举，分别映射为 6 / 8。
+    case auto_aim::ArmorName::sentry:
+      return 7;   // 哨兵
+    case auto_aim::ArmorName::base:
+      return 9;   // 基地
+    case auto_aim::ArmorName::outpost:
+      return 10;  // 前哨站
+    default:
+      return 0;   // 无目标 / 未知
+  }
+}
+
+void fill_nav_target_info(io::Command & command, const std::list<auto_aim::Target> & targets)
+{
+  if (targets.empty()) {
+    command.armor_id = 0;
+    command.vx = 0.0;
+    command.vy = 0.0;
+    return;
+  }
+
+  const auto & target = targets.front();
+  const auto x = target.ekf_x();
+  command.armor_id = armor_name_to_nav_id(target.name);
+  command.vx = x[1];
+  command.vy = x[3];
 }
 
 double get_horizon_distance(const std::list<auto_aim::Target> & targets)
@@ -706,6 +748,7 @@ int main(int argc, char * argv[])
 
     command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
     command.horizon_distance = command.control ? get_horizon_distance(targets) : 0.0;
+    fill_nav_target_info(command, targets);
     if (omni_mode && command.control && command.has_target_yaw) {
       omni_target_error_deg = angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
       omni_target_reached = omni_target_error_deg.value() <= omni_hold_release_tolerance_deg;
@@ -736,6 +779,9 @@ int main(int argc, char * argv[])
       data["cmd_small_yaw"] = command.small_yaw * 57.3;
     }
     data["horizon_distance"] = command.horizon_distance;
+    data["target_armor_id"] = static_cast<int>(command.armor_id);
+    data["target_vx"] = command.vx;
+    data["target_vy"] = command.vy;
     if (omni_target_abs_yaw_deg.has_value()) data["omni_target_yaw"] = omni_target_abs_yaw_deg.value();
     if (omni_candidate_abs_yaw_deg.has_value()) data["omni_candidate_abs_yaw"] = omni_candidate_abs_yaw_deg.value();
     if (omni_candidate_base_big_yaw_deg.has_value()) {

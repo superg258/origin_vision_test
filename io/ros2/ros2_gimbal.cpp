@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -120,6 +121,9 @@ rclcpp::SerializedMessage serialize_gimbal_cmd(
   const double small_yaw_deg = command.control ? rad2deg(small_yaw_rad) : 0.0;
   const double target_distance = command.control ? command.horizon_distance : 0.0;
   const bool fire_advice = command.control && command.shoot;
+  const uint8_t armor_id = command.armor_id;
+  const double vx = command.vx;
+  const double vy = command.vy;
 
   eprosima::fastcdr::FastBuffer buffer;
   eprosima::fastcdr::Cdr cdr(buffer);
@@ -138,6 +142,9 @@ rclcpp::SerializedMessage serialize_gimbal_cmd(
   cdr << small_yaw_deg;
   cdr << fire_advice;
   cdr << target_distance;
+  cdr << armor_id;
+  cdr << vx;
+  cdr << vy;
 
   const auto serialized_size = cdr.get_serialized_data_length();
   rclcpp::SerializedMessage message(serialized_size);
