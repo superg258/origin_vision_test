@@ -37,6 +37,9 @@ public:
   bool has_imu() const;
 
   void send(const io::Command & command);
+  void send_mpc(
+    bool shoot, float yaw, float pitch, float yaw_vel, float yaw_acc, float pitch_vel,
+    float pitch_acc);
 
   double bullet_speed() const;
   Mode mode() const;

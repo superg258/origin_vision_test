@@ -73,7 +73,9 @@ int main(int argc, char * argv[])
       plan_yaw_acc.store(plan.yaw_acc);
       plan_pitch_acc.store(plan.pitch_acc);
 
-      gimbal.send(io::Command{plan.control, plan.fire, plan.yaw, plan.pitch});
+      gimbal.send_mpc(
+        plan.fire, plan.yaw, plan.pitch, plan.yaw_vel, plan.yaw_acc, plan.pitch_vel,
+        plan.pitch_acc);
 
       auto gs = gimbal.state();
       nlohmann::json data;
@@ -170,7 +172,7 @@ int main(int argc, char * argv[])
 
   quit = true;
   if (plan_thread.joinable()) plan_thread.join();
-  gimbal.send(io::Command{false, false, 0.0, 0.0});
+  gimbal.send_mpc(false, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
 
   return 0;
 }

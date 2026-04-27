@@ -163,6 +163,44 @@ void OVGimbal::send(const io::Command & command)
   }
 }
 
+void OVGimbal::send_mpc(
+  bool shoot, float yaw, float pitch, float yaw_vel, float yaw_acc, float pitch_vel,
+  float pitch_acc)
+{
+  const uint8_t header = 0xAA;
+  const uint8_t cmd_id = 0x81;
+
+  uint8_t payload[1 + sizeof(float) * 6];
+  payload[0] = shoot ? 1 : 0;
+
+  float yaw_deg = static_cast<float>(rad2deg(yaw));
+  float pitch_deg = static_cast<float>(rad2deg(-pitch));
+  float yaw_vel_deg = static_cast<float>(rad2deg(yaw_vel));
+  float yaw_acc_deg = static_cast<float>(rad2deg(yaw_acc));
+  float pitch_vel_deg = static_cast<float>(rad2deg(-pitch_vel));
+  float pitch_acc_deg = static_cast<float>(rad2deg(-pitch_acc));
+
+  std::memcpy(payload + 1, &yaw_deg, sizeof(float));
+  std::memcpy(payload + 5, &pitch_deg, sizeof(float));
+  std::memcpy(payload + 9, &yaw_vel_deg, sizeof(float));
+  std::memcpy(payload + 13, &yaw_acc_deg, sizeof(float));
+  std::memcpy(payload + 17, &pitch_vel_deg, sizeof(float));
+  std::memcpy(payload + 21, &pitch_acc_deg, sizeof(float));
+
+  const uint8_t length = static_cast<uint8_t>(3 + sizeof(payload));
+  uint8_t frame[3 + sizeof(payload)];
+  frame[0] = header;
+  frame[1] = length;
+  frame[2] = cmd_id;
+  std::memcpy(frame + 3, payload, sizeof(payload));
+
+  try {
+    serial_.write(frame, sizeof(frame));
+  } catch (const std::exception & e) {
+    tools::logger()->warn("[OVGimbal] Failed to write mpc serial: {}", e.what());
+  }
+}
+
 double OVGimbal::bullet_speed() const
 {
   std::lock_guard<std::mutex> lk(mtx_);
