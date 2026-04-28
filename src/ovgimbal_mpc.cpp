@@ -26,6 +26,8 @@ const std::string keys =
   "{help h usage ? |                           | 输出命令行参数说明}"
   "{@config-path   | configs/standard4.yaml   | 位置参数，yaml配置文件路径 }";
 
+constexpr double RAD_TO_DEG = 57.3;
+
 int main(int argc, char * argv[])
 {
   tools::Exiter exiter;
@@ -57,6 +59,8 @@ int main(int argc, char * argv[])
   std::atomic<float> plan_yaw_acc = 0.0f;
   std::atomic<float> plan_pitch_acc = 0.0f;
   std::atomic<bool> plan_fire = false;
+  std::atomic<float> image_gimbal_yaw = 0.0f;
+  std::atomic<float> image_gimbal_pitch = 0.0f;
 
   auto plan_thread = std::thread([&]() {
     auto t0 = std::chrono::steady_clock::now();
@@ -80,18 +84,18 @@ int main(int argc, char * argv[])
       auto gs = gimbal.state();
       nlohmann::json data;
       data["t"] = tools::delta_time(std::chrono::steady_clock::now(), t0);
-      data["gimbal_yaw"] = gs.yaw;
-      data["gimbal_pitch"] = gs.pitch;
-      data["gimbal_yaw_vel"] = gs.yaw_vel;
-      data["gimbal_pitch_vel"] = gs.pitch_vel;
-      data["target_yaw"] = plan.target_yaw;
-      data["target_pitch"] = plan.target_pitch;
-      data["plan_yaw"] = plan.yaw;
-      data["plan_yaw_vel"] = plan.yaw_vel;
-      data["plan_yaw_acc"] = plan.yaw_acc;
-      data["plan_pitch"] = plan.pitch;
-      data["plan_pitch_vel"] = plan.pitch_vel;
-      data["plan_pitch_acc"] = plan.pitch_acc;
+      data["gimbal_yaw"] = image_gimbal_yaw.load() * RAD_TO_DEG;
+      data["gimbal_pitch"] = image_gimbal_pitch.load() * RAD_TO_DEG;
+      data["gimbal_yaw_vel"] = gs.yaw_vel * RAD_TO_DEG;
+      data["gimbal_pitch_vel"] = gs.pitch_vel * RAD_TO_DEG;
+      data["target_yaw"] = plan.target_yaw * RAD_TO_DEG;
+      data["target_pitch"] = plan.target_pitch * RAD_TO_DEG;
+      data["plan_yaw"] = plan.yaw * RAD_TO_DEG;
+      data["plan_yaw_vel"] = plan.yaw_vel * RAD_TO_DEG;
+      data["plan_yaw_acc"] = plan.yaw_acc * RAD_TO_DEG;
+      data["plan_pitch"] = plan.pitch * RAD_TO_DEG;
+      data["plan_pitch_vel"] = plan.pitch_vel * RAD_TO_DEG;
+      data["plan_pitch_acc"] = plan.pitch_acc * RAD_TO_DEG;
       data["fire"] = plan.fire ? 1 : 0;
       data["fired"] = plan.fire ? 1 : 0;
 
@@ -119,6 +123,8 @@ int main(int argc, char * argv[])
     auto q = gimbal.imu_at_image(t);
     solver.set_R_gimbal2world(q);
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+    image_gimbal_yaw.store(static_cast<float>(ypr[0]));
+    image_gimbal_pitch.store(static_cast<float>(ypr[1]));
     auto gs = gimbal.state();
 
     auto armors = yolo.detect(img, frame_count);
@@ -145,14 +151,15 @@ int main(int argc, char * argv[])
     tools::draw_text(
       img,
       fmt::format(
-        "Yaw/Pitch: {:.2f}/{:.2f} deg | Vel: {:.2f}/{:.2f} deg/s", ypr[0] * 57.3, ypr[1] * 57.3,
-        gs.yaw_vel * 57.3, gs.pitch_vel * 57.3),
+        "Yaw/Pitch: {:.2f}/{:.2f} deg | Vel: {:.2f}/{:.2f} deg/s",
+        ypr[0] * RAD_TO_DEG, ypr[1] * RAD_TO_DEG, gs.yaw_vel * RAD_TO_DEG,
+        gs.pitch_vel * RAD_TO_DEG),
       {10, 30}, {255, 255, 255});
     tools::draw_text(
       img,
       fmt::format(
-        "MPC yaw/pitch: {:.2f}/{:.2f} deg | fire={}", plan_yaw.load() * 57.3,
-        plan_pitch.load() * 57.3, plan_fire.load() ? 1 : 0),
+        "MPC yaw/pitch: {:.2f}/{:.2f} deg | fire={}", plan_yaw.load() * RAD_TO_DEG,
+        plan_pitch.load() * RAD_TO_DEG, plan_fire.load() ? 1 : 0),
       {10, 60}, {154, 50, 205});
     tools::draw_text(
       img, fmt::format("Tracker={}", tracker.state()), {10, 90}, {0, 255, 0});
@@ -160,8 +167,8 @@ int main(int argc, char * argv[])
       img,
       fmt::format(
         "MPC vel: {:.2f}/{:.2f} deg/s | acc: {:.2f}/{:.2f} deg/s^2",
-        plan_yaw_vel.load() * 57.3, plan_pitch_vel.load() * 57.3, plan_yaw_acc.load() * 57.3,
-        plan_pitch_acc.load() * 57.3),
+        plan_yaw_vel.load() * RAD_TO_DEG, plan_pitch_vel.load() * RAD_TO_DEG,
+        plan_yaw_acc.load() * RAD_TO_DEG, plan_pitch_acc.load() * RAD_TO_DEG),
       {10, 120}, {0, 255, 255});
 
     cv::resize(img, img, {}, 0.5, 0.5);
