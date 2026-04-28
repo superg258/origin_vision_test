@@ -2,25 +2,13 @@
 
 #include <Eigen/Dense>
 #include <chrono>
-#include <cstdint>
-#include <iomanip>
 #include <memory>
-#include <sstream>
 #include <thread>
 
 #include "tools/logger.hpp"
 
 namespace io
 {
-namespace
-{
-std::string format_double(double value)
-{
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(6) << value;
-  return oss.str();
-}
-}  // namespace
 
 Publish2Nav::Publish2Nav() : Node("auto_aim_target_pos_publisher")
 {
@@ -36,23 +24,14 @@ Publish2Nav::~Publish2Nav()
 
 void Publish2Nav::send_data(const Eigen::Vector4d & target_pos)
 {
-  // 旧协议：x,y,z,yaw
+  // 创建消息
   auto message = std::make_shared<std_msgs::msg::String>();
-  message->data = format_double(target_pos[0]) + "," + format_double(target_pos[1]) + "," +
-                  format_double(target_pos[2]) + "," + format_double(target_pos[3]);
 
-  publisher_->publish(*message);
-}
+  // 将 Eigen::Vector3d 数据转换为字符串并存储在消息中
+  message->data = std::to_string(target_pos[0]) + "," + std::to_string(target_pos[1]) + "," +
+                  std::to_string(target_pos[2]) + "," + std::to_string(target_pos[3]);
 
-void Publish2Nav::send_data(const Eigen::Vector4d & target_pos, int8_t armor_id, double speed)
-{
-  // 新协议：x,y,z,yaw,armor_id,speed
-  // 前 4 个字段保持和旧协议一致，只追加装甲板 id 与水平移动速度。
-  auto message = std::make_shared<std_msgs::msg::String>();
-  message->data = format_double(target_pos[0]) + "," + format_double(target_pos[1]) + "," +
-                  format_double(target_pos[2]) + "," + format_double(target_pos[3]) + "," +
-                  std::to_string(static_cast<int>(armor_id)) + "," + format_double(speed);
-
+  // 发布消息
   publisher_->publish(*message);
 
   // RCLCPP_INFO(

@@ -1,15 +1,8 @@
 #ifndef IO__ROS2_HPP
 #define IO__ROS2_HPP
 
-#include <cstdint>
-
 #include "publish2nav.hpp"
 #include "subscribe2nav.hpp"
-
-namespace auto_aim
-{
-class Target;
-}
 
 namespace io
 {
@@ -20,14 +13,7 @@ public:
 
   ~ROS2();
 
-  // 原协议：x,y,z,yaw
   void publish(const Eigen::Vector4d & target_pos);
-
-  // 新协议：x,y,z,yaw,armor_id,speed
-  void publish(const Eigen::Vector4d & target_pos, int8_t armor_id, double speed);
-
-  // 保持原来的 x,y,z,yaw，只从 Target 追加 armor_id 和 speed
-  void publish(const Eigen::Vector4d & target_pos, const auto_aim::Target & target);
 
   std::vector<int8_t> subscribe_enemy_status();
 
