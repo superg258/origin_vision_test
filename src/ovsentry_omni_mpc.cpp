@@ -339,19 +339,22 @@ int main(int argc, char * argv[])
       auto gs = gimbal->state();
       auto plan = planner.plan(target, gs.bullet_speed);
 
-      io::Command command{plan.control, plan.fire, plan.yaw, plan.pitch};
-      if (target.has_value()) {
-        command.horizon_distance = horizon_distance(target.value());
-        apply_sentry_tracking_yaws(command, target.value(), gs.big_yaw);
+      double big_yaw = plan.yaw;
+      double small_yaw = plan.yaw;
+      if (target.has_value() && plan.control) {
+        big_yaw = target_center_big_yaw_rad(target.value(), gs.big_yaw);
+        small_yaw = plan.yaw;
       }
 
-      mpc_control.store(command.control);
-      mpc_fire.store(command.shoot);
-      mpc_yaw.store(command.yaw);
-      mpc_pitch.store(command.pitch);
+      mpc_control.store(plan.control);
+      mpc_fire.store(plan.fire);
+      mpc_yaw.store(small_yaw);
+      mpc_pitch.store(plan.pitch);
 
       std::lock_guard<std::mutex> lk(gimbal_send_mutex);
-      gimbal->send(command);
+      gimbal->send_mpc(
+        plan.control, plan.fire, big_yaw, small_yaw, plan.pitch, plan.yaw_vel, plan.pitch_vel,
+        plan.yaw_acc, plan.pitch_acc);
       std::this_thread::sleep_for(10ms);
     }
   });

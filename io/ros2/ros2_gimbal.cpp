@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <cstdint>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -113,17 +112,19 @@ void deserialize_gimbal_status(
   big_yaw_deg = big_yaw;
 }
 
-rclcpp::SerializedMessage serialize_gimbal_cmd(
-  const io::Command & command, double big_yaw_rad, double small_yaw_rad)
+
+rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
+  bool control, bool fire, double big_yaw_rad, double small_yaw_rad, double pitch_rad,
+  double yaw_vel_rad, double pitch_vel_rad, double yaw_acc_rad, double pitch_acc_rad)
 {
-  const double pitch_deg = command.control ? rad2deg(-command.pitch) : 0.0;
-  const double big_yaw_deg = command.control ? rad2deg(big_yaw_rad) : 0.0;
-  const double small_yaw_deg = command.control ? rad2deg(small_yaw_rad) : 0.0;
-  const double target_distance = command.control ? command.horizon_distance : 0.0;
-  const bool fire_advice = command.control && command.shoot;
-  const uint8_t armor_id = command.armor_id;
-  const double vx = command.vx;
-  const double vy = command.vy;
+  const bool fire_advice = control && fire;
+  const double big_yaw_deg = control ? rad2deg(big_yaw_rad) : 0.0;
+  const double small_yaw_deg = control ? rad2deg(small_yaw_rad) : 0.0;
+  const double pitch_deg = control ? rad2deg(-pitch_rad) : 0.0;
+  const double yaw_vel_deg = control ? rad2deg(yaw_vel_rad) : 0.0;
+  const double pitch_vel_deg = control ? rad2deg(-pitch_vel_rad) : 0.0;
+  const double yaw_acc_deg = control ? rad2deg(yaw_acc_rad) : 0.0;
+  const double pitch_acc_deg = control ? rad2deg(-pitch_acc_rad) : 0.0;
 
   eprosima::fastcdr::FastBuffer buffer;
   eprosima::fastcdr::Cdr cdr(buffer);
@@ -134,17 +135,27 @@ rclcpp::SerializedMessage serialize_gimbal_cmd(
   const uint32_t nanosec = static_cast<uint32_t>(now_ns % 1000000000LL);
   const std::string frame_id;
 
+  // GimbalCmd.msg 顺序必须保持一致：
+  // Header header
+  // bool fire_advice
+  // float64 big_yaw
+  // float64 small_yaw
+  // float64 pitch
+  // float64 yaw_vel
+  // float64 pitch_vel
+  // float64 yaw_acc
+  // float64 pitch_acc
   cdr << sec;
   cdr << nanosec;
   cdr << frame_id;
-  cdr << pitch_deg;
+  cdr << fire_advice;
   cdr << big_yaw_deg;
   cdr << small_yaw_deg;
-  cdr << fire_advice;
-  cdr << target_distance;
-  cdr << armor_id;
-  cdr << vx;
-  cdr << vy;
+  cdr << pitch_deg;
+  cdr << yaw_vel_deg;
+  cdr << pitch_vel_deg;
+  cdr << yaw_acc_deg;
+  cdr << pitch_acc_deg;
 
   const auto serialized_size = cdr.get_serialized_data_length();
   rclcpp::SerializedMessage message(serialized_size);
@@ -152,6 +163,14 @@ rclcpp::SerializedMessage serialize_gimbal_cmd(
   std::memcpy(raw.buffer, buffer.getBuffer(), serialized_size);
   raw.buffer_length = serialized_size;
   return message;
+}
+
+rclcpp::SerializedMessage serialize_gimbal_cmd(
+  const io::Command & command, double big_yaw_rad, double small_yaw_rad)
+{
+  return serialize_gimbal_mpc_cmd(
+    command.control, command.shoot, big_yaw_rad, small_yaw_rad, command.pitch, 0.0, 0.0, 0.0,
+    0.0);
 }
 }  // namespace
 
@@ -424,6 +443,21 @@ void ROS2Gimbal::send(const io::Command & command, double big_yaw, double small_
     cmd_publisher_->publish(message);
   } catch (const std::exception & e) {
     tools::logger()->warn("[ROS2Gimbal] Failed to publish gimbal cmd: {}", e.what());
+  }
+}
+
+void ROS2Gimbal::send_mpc(
+  bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
+  double pitch_vel, double yaw_acc, double pitch_acc)
+{
+  if (!cmd_publisher_) return;
+
+  try {
+    auto message = serialize_gimbal_mpc_cmd(
+      control, fire, big_yaw, small_yaw, pitch, yaw_vel, pitch_vel, yaw_acc, pitch_acc);
+    cmd_publisher_->publish(message);
+  } catch (const std::exception & e) {
+    tools::logger()->warn("[ROS2Gimbal] Failed to publish MPC gimbal cmd: {}", e.what());
   }
 }
 

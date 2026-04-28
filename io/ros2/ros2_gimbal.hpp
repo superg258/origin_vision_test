@@ -40,6 +40,12 @@ public:
   void send(const io::Command & command);
   void send(const io::Command & command, double big_yaw, double small_yaw);
 
+  // MPC 专用发送接口：直接发送 Planner::plan() 输出的角度、角速度、角加速度。
+  // 输入单位为 rad / rad/s / rad/s^2，ROS2 消息中统一转换为 deg / deg/s / deg/s^2。
+  void send_mpc(
+    bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
+    double pitch_vel, double yaw_acc, double pitch_acc);
+
   double bullet_speed() const;
   Mode mode() const;
   ROS2GimbalState state() const;
