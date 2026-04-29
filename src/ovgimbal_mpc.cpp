@@ -27,6 +27,7 @@ const std::string keys =
   "{@config-path   | configs/standard4.yaml   | 位置参数，yaml配置文件路径 }";
 
 constexpr double RAD_TO_DEG = 57.3;
+constexpr double TRAJECTORY_BULLET_SPEED = 11.7;
 
 int main(int argc, char * argv[])
 {
@@ -67,7 +68,7 @@ int main(int argc, char * argv[])
 
     while (!quit) {
       auto target = target_queue.front();
-      auto plan = planner.plan(target, gimbal.bullet_speed());
+      auto plan = planner.plan(target, TRAJECTORY_BULLET_SPEED);
 
       plan_fire.store(plan.fire);
       plan_yaw.store(plan.yaw);
