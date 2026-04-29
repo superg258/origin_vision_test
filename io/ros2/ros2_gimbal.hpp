@@ -44,7 +44,8 @@ public:
   // 输入单位为 rad / rad/s / rad/s^2，ROS2 消息中统一转换为 deg / deg/s / deg/s^2。
   void send_mpc(
     bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
-    double pitch_vel, double yaw_acc, double pitch_acc);
+    double pitch_vel, double yaw_acc, double pitch_acc,
+  uint8_t target_id, double vx, double vy);
 
   double bullet_speed() const;
   Mode mode() const;
