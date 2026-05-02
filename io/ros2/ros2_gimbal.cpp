@@ -115,7 +115,7 @@ void deserialize_gimbal_status(
 rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   bool control, bool fire, double big_yaw_rad, double small_yaw_rad, double pitch_rad,
   double yaw_vel_rad, double pitch_vel_rad, double yaw_acc_rad, double pitch_acc_rad,
-  uint8_t target_id, double vx, double vy)
+  uint8_t armor_id, double vx, double vy, double distance)
 {
   const bool fire_advice = control && fire;
   const double big_yaw_deg = control ? rad2deg(big_yaw_rad) : 0.0;
@@ -139,7 +139,7 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   cdr << nanosec;
   cdr << frame_id;
 
-  cdr << target_id;
+  cdr << armor_id;
   cdr << vx;
   cdr << vy;
 
@@ -151,7 +151,7 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   cdr << pitch_vel_deg;
   cdr << yaw_acc_deg;
   cdr << pitch_acc_deg;
-
+  cdr << distance;
   const auto serialized_size = cdr.get_serialized_data_length();
   rclcpp::SerializedMessage message(serialized_size);
   auto & raw = message.get_rcl_serialized_message();
@@ -162,14 +162,14 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
 
 void ROS2Gimbal::send_mpc(
   bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
-  double pitch_vel, double yaw_acc, double pitch_acc,
-  uint8_t target_id, double vx, double vy)
+  double pitch_vel, double yaw_acc, double pitch_acc, uint8_t armor_id, double vx, double vy,
+  double distance)
 {
   if (!cmd_publisher_) return;
   try {
     auto message = serialize_gimbal_mpc_cmd(
       control, fire, big_yaw, small_yaw, pitch, yaw_vel, pitch_vel, yaw_acc, pitch_acc,
-      target_id, vx, vy);
+      armor_id, vx, vy, distance);
     cmd_publisher_->publish(message);
   } catch (const std::exception & e) {
     tools::logger()->warn("[ROS2Gimbal] Failed to publish MPC gimbal cmd: {}", e.what());
@@ -182,7 +182,7 @@ rclcpp::SerializedMessage serialize_gimbal_cmd(
 {
   return serialize_gimbal_mpc_cmd(
     command.control, command.shoot, big_yaw_rad, small_yaw_rad, command.pitch, 0.0, 0.0, 0.0,
-    0.0, 0, 0.0, 0.0); // 默认 ID=0, 速度=0
+    0.0, 0, 0.0, 0.0, 0.0); // 默认 ID=0, 速度=0
 }
 }  // namespace
 

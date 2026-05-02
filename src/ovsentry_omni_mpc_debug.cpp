@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <list>
 #include <memory>
@@ -231,6 +232,7 @@ int main(int argc, char * argv[])
 
   std::atomic<bool> quit{false};
   std::atomic<bool> mpc_enabled{false};
+  std::atomic<uint64_t> mpc_generation{0};
   std::mutex gimbal_send_mutex;
 
   std::thread mpc_thread([&]() {
@@ -240,9 +242,14 @@ int main(int argc, char * argv[])
         continue;
       }
 
+      const auto local_generation = mpc_generation.load();
       auto target = target_queue.front();
       auto gs = gimbal->state();
       auto plan = planner.plan(target, gs.bullet_speed);
+
+      if (!mpc_enabled.load() || local_generation != mpc_generation.load()) {
+        continue;
+      }
 
       double big_yaw = plan.yaw;
       double small_yaw = plan.yaw;
@@ -252,6 +259,9 @@ int main(int argc, char * argv[])
       }
 
       std::lock_guard<std::mutex> lk(gimbal_send_mutex);
+      if (!mpc_enabled.load() || local_generation != mpc_generation.load()) {
+        continue;
+      }
       gimbal->send_mpc(
         plan.control, plan.fire, big_yaw, small_yaw, plan.pitch, plan.yaw_vel, plan.pitch_vel,
         plan.yaw_acc, plan.pitch_acc);
@@ -280,16 +290,27 @@ int main(int argc, char * argv[])
     decider.armor_filter(armors);
     decider.set_priority(armors);
     auto targets = tracker.track(armors, main_timestamp);
-    const bool omni_mode = tracker.state() == "lost";
+    const std::string tracker_state = tracker.state();
+    const bool omni_mode = tracker_state == "lost";
+    const bool enable_mpc = !omni_mode && !targets.empty();
 
-    if (!omni_mode && !targets.empty()) {
+    if (enable_mpc) {
       target_queue.push(targets.front());
-      mpc_enabled.store(true);
+      if (!mpc_enabled.exchange(true)) {
+        mpc_generation.fetch_add(1);
+      }
+      // 进入主相机 MPC 跟踪后，清掉旧的全向保持目标，避免下次丢失时复用过期 yaw。
+      omni_hold_command.reset();
+      left_img.release();
+      right_img.release();
+      back_img.release();
       continue;
     }
 
     target_queue.push(std::nullopt);
-    mpc_enabled.store(false);
+    if (mpc_enabled.exchange(false)) {
+      mpc_generation.fetch_add(1);
+    }
 
     const auto gimbal_state = gimbal->state();
     auto left_frame = detect_omni_frame(
@@ -330,7 +351,7 @@ int main(int argc, char * argv[])
   if (mpc_thread.joinable()) mpc_thread.join();
   {
     std::lock_guard<std::mutex> lk(gimbal_send_mutex);
-    gimbal->send(io::Command{false, false, 0.0, 0.0});
+    gimbal->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
   }
 
   return 0;

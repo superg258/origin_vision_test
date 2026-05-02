@@ -349,19 +349,20 @@ int main(int argc, char * argv[])
       double big_yaw = plan.yaw;
       double small_yaw = plan.yaw;
       
-      // 新增：准备 ID 和 速度数据
-      uint8_t target_id = 0;
-      double vx = 0.0, vy = 0.0;
+      uint8_t armor_id = 0;
+      double vx = 0.0;
+      double vy = 0.0;
+      double distance = 0.0;
 
       if (target.has_value() && plan.control) {
         big_yaw = target_center_big_yaw_rad(target.value(), gs.big_yaw);
         small_yaw = plan.yaw;
         
-        // 提取数据：ID 使用 target.name (枚举值)，速度从 EKF 状态量提取 (vx=1, vy=3)
-        target_id = static_cast<uint8_t>(target->name);
-        auto ekf_x = target->ekf_x();
+        armor_id = static_cast<uint8_t>(std::max(0, target->last_id));
+        const auto ekf_x = target->ekf_x();
         vx = ekf_x[1];
         vy = ekf_x[3];
+        distance = std::sqrt(ekf_x[0] * ekf_x[0] + ekf_x[2] * ekf_x[2]);
       }
 
       mpc_control.store(plan.control);
@@ -374,10 +375,9 @@ int main(int argc, char * argv[])
         continue;
       }
       
-      // 调用新的发送函数
       gimbal->send_mpc(
         plan.control, plan.fire, big_yaw, small_yaw, plan.pitch, plan.yaw_vel, plan.pitch_vel,
-        plan.yaw_acc, plan.pitch_acc, target_id, vx, vy);
+        plan.yaw_acc, plan.pitch_acc, armor_id, vx, vy, distance);
         
       std::this_thread::sleep_for(10ms);
     }
@@ -597,7 +597,7 @@ int main(int argc, char * argv[])
   if (mpc_thread.joinable()) mpc_thread.join();
   {
     std::lock_guard<std::mutex> lk(gimbal_send_mutex);
-    gimbal->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0);
+    gimbal->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
   }
 
   return 0;

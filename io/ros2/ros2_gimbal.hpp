@@ -4,6 +4,7 @@
 #include <Eigen/Geometry>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,12 +41,11 @@ public:
   void send(const io::Command & command);
   void send(const io::Command & command, double big_yaw, double small_yaw);
 
-  // MPC 专用发送接口：直接发送 Planner::plan() 输出的角度、角速度、角加速度。
-  // 输入单位为 rad / rad/s / rad/s^2，ROS2 消息中统一转换为 deg / deg/s / deg/s^2。
+  // Inputs use rad / rad/s / rad/s^2 and are serialized to ROS2 in degree units.
   void send_mpc(
     bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
-    double pitch_vel, double yaw_acc, double pitch_acc,
-  uint8_t target_id, double vx, double vy);
+    double pitch_vel, double yaw_acc, double pitch_acc, uint8_t armor_id = 0, double vx = 0.0,
+    double vy = 0.0, double distance = 0.0);
 
   double bullet_speed() const;
   Mode mode() const;
