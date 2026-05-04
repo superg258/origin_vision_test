@@ -27,7 +27,6 @@ const std::string keys =
   "{@config-path   | configs/standard4.yaml   | 位置参数，yaml配置文件路径 }";
 
 constexpr double RAD_TO_DEG = 57.3;
-constexpr double TRAJECTORY_BULLET_SPEED = 11.7;
 
 int main(int argc, char * argv[])
 {
@@ -68,7 +67,7 @@ int main(int argc, char * argv[])
 
     while (!quit) {
       auto target = target_queue.front();
-      auto plan = planner.plan(target, TRAJECTORY_BULLET_SPEED);
+      auto plan = planner.plan(target, gimbal.bullet_speed());
 
       plan_fire.store(plan.fire);
       plan_yaw.store(plan.yaw);
@@ -99,6 +98,7 @@ int main(int argc, char * argv[])
       data["plan_pitch_acc"] = plan.pitch_acc * RAD_TO_DEG;
       data["fire"] = plan.fire ? 1 : 0;
       data["fired"] = plan.fire ? 1 : 0;
+      data["bullet_speed"] = gimbal.bullet_speed();
 
       if (target.has_value()) {
         data["target_z"] = target->ekf_x()[4];
