@@ -102,6 +102,38 @@ std::optional<auto_aim::Armor> pick_top_armor(const std::list<auto_aim::Armor> &
   return *best_it;
 }
 
+struct ArmorTargetMask
+{
+  bool enabled = false;
+  std::vector<auto_aim::ArmorName> allowed_names;
+};
+
+ArmorTargetMask read_nav_armor_target_mask()
+{
+  ArmorTargetMask mask;
+
+  // TODO(nav): Replace this placeholder with the real navigation/electrical-control signal.
+  // Example: when navigation asks vision to attack base only:
+  // mask.enabled = true;
+  // mask.allowed_names = {auto_aim::ArmorName::base};
+
+  return mask;
+}
+
+void apply_armor_target_mask(std::list<auto_aim::Armor> & armors, const ArmorTargetMask & mask)
+{
+  if (!mask.enabled) return;
+  if (mask.allowed_names.empty()) {
+    armors.clear();
+    return;
+  }
+
+  armors.remove_if([&](const auto_aim::Armor & armor) {
+    return std::find(mask.allowed_names.begin(), mask.allowed_names.end(), armor.name) ==
+           mask.allowed_names.end();
+  });
+}
+
 std::pair<double, double> calc_delta_angle_deg(
   const auto_aim::Armor & armor, const OmniCamConfig & cam)
 {
@@ -406,7 +438,9 @@ int main(int argc, char * argv[])
     auto t0 = std::chrono::steady_clock::now();
     auto armors = yolo_auto.detect(main_img, frame_count);
     auto t1 = std::chrono::steady_clock::now();
+    const auto armor_target_mask = read_nav_armor_target_mask();
     decider.armor_filter(armors);
+    apply_armor_target_mask(armors, armor_target_mask);
     decider.set_priority(armors);
     auto targets = tracker.track(armors, main_timestamp);
     const std::string tracker_state = tracker.state();
@@ -472,6 +506,7 @@ int main(int argc, char * argv[])
                                 double infer_ms) {
           frame.result.infer_ms = infer_ms;
           decider.armor_filter(frame.result.armors);
+          apply_armor_target_mask(frame.result.armors, armor_target_mask);
           decider.set_priority(frame.result.armors);
           frame.result.top_armor = pick_top_armor(frame.result.armors);
           if (frame.result.top_armor.has_value()) {
