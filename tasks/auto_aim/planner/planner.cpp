@@ -15,6 +15,7 @@ Planner::Planner(const std::string & config_path)
   auto yaml = tools::load(config_path);
   yaw_offset_ = tools::read<double>(yaml, "yaw_offset") / 57.3;
   pitch_offset_ = tools::read<double>(yaml, "pitch_offset") / 57.3;
+  resistance_k_ = yaml["resistance_k"].as<double>(0.0);
   fire_thresh_ = tools::read<double>(yaml, "fire_thresh");
   decision_speed_ = tools::read<double>(yaml, "decision_speed");
   high_speed_delay_time_ = tools::read<double>(yaml, "high_speed_delay_time");
@@ -41,7 +42,7 @@ Plan Planner::plan(Target target, double bullet_speed)
       xyz = xyza.head<3>();
     }
   }
-  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
+  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z(), resistance_k_);
   target.predict(bullet_traj.fly_time);
 
   // 2. Get trajectory
@@ -170,7 +171,7 @@ Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_sp
   debug_xyza = Eigen::Vector4d(xyz.x(), xyz.y(), xyz.z(), yaw);
 
   auto azim = std::atan2(xyz.y(), xyz.x());
-  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
+  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z(), resistance_k_);
   if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
 
   return {tools::limit_rad(azim + yaw_offset_), -bullet_traj.pitch - pitch_offset_};
