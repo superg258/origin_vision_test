@@ -85,8 +85,8 @@ Aimer::Aimer(const std::string & config_path)
   center_hold_enter_phase_rad_ = yaml["center_hold_enter_phase_rad"].as<double>(0.65);
   center_hold_exit_phase_rad_ = yaml["center_hold_exit_phase_rad"].as<double>(0.45);
   max_predicted_miss_scale_ = yaml["max_predicted_miss_scale"].as<double>(0.35);
-  bullet_speed_fallback_ = yaml["bullet_speed_fallback"].as<double>(23.0);
-  if (bullet_speed_fallback_ <= 1.0) bullet_speed_fallback_ = 23.0;
+  bullet_speed_fallback_ = yaml["bullet_speed_fallback"].as<double>(11.7);
+  if (bullet_speed_fallback_ <= 1.0) bullet_speed_fallback_ = 11.7;
   if (yaml["left_yaw_offset"].IsDefined() && yaml["right_yaw_offset"].IsDefined()) {
     left_yaw_offset_ = yaml["left_yaw_offset"].as<double>() / 57.3;
     right_yaw_offset_ = yaml["right_yaw_offset"].as<double>() / 57.3;

@@ -91,7 +91,7 @@ private:
   double center_hold_enter_phase_rad_ = 0.65;
   double center_hold_exit_phase_rad_ = 0.45;
   double max_predicted_miss_scale_ = 0.35;
-  double bullet_speed_fallback_ = 23.0;
+  double bullet_speed_fallback_ = 11.7;
   bool high_speed_delay_mode_ = false;
   bool center_hold_mode_ = false;
   struct ArmorContinuityLite
