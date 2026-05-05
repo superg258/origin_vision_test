@@ -35,7 +35,6 @@ outpost_max_temp_lost_count: 75
 yaw_offset: -1 # degree
 pitch_offset: 1.2 # degree
 decision_speed: 5 # rad/s
-resistance_k: 0.023
 high_speed_delay_time: 0.22 # s
 low_speed_delay_time: 0.2 # s
 

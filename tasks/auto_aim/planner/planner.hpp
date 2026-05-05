@@ -42,7 +42,6 @@ public:
 private:
   double yaw_offset_;
   double pitch_offset_;
-  double resistance_k_;
   double fire_thresh_;
   double low_speed_delay_time_, high_speed_delay_time_, decision_speed_;
 
