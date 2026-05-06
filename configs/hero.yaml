@@ -37,7 +37,9 @@ pitch_offset: 1.2 # degree
 decision_speed: 5 # rad/s
 high_speed_delay_time: 0.22 # s
 low_speed_delay_time: 0.2 # s
-
+first_tolerance: 1
+second_tolerance: 1
+judge_distance: 2
 
 #####-----时序参数-----#####
 timing:

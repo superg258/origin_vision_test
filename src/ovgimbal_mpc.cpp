@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <optional>
@@ -19,6 +20,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/thread_safe_queue.hpp"
+#include "tools/yaml.hpp"
 
 using namespace std::chrono_literals;
 
@@ -40,6 +42,11 @@ int main(int argc, char * argv[])
     return 0;
   }
 
+  auto yaml = tools::load(config_path);
+  const double first_tolerance = tools::read<double>(yaml, "first_tolerance") / RAD_TO_DEG;
+  const double second_tolerance = tools::read<double>(yaml, "second_tolerance") / RAD_TO_DEG;
+  const double judge_distance = tools::read<double>(yaml, "judge_distance");
+
   io::OVGimbal gimbal(config_path);
   io::Camera camera(config_path);
 
@@ -59,6 +66,9 @@ int main(int argc, char * argv[])
   std::atomic<float> plan_yaw_acc = 0.0f;
   std::atomic<float> plan_pitch_acc = 0.0f;
   std::atomic<bool> plan_fire = false;
+  std::atomic<bool> mpc_ready_fire = false;
+  std::atomic<float> fire_yaw_error = 0.0f;
+  std::atomic<float> fire_pitch_error = 0.0f;
   std::atomic<float> image_gimbal_yaw = 0.0f;
   std::atomic<float> image_gimbal_pitch = 0.0f;
 
@@ -67,9 +77,27 @@ int main(int argc, char * argv[])
 
     while (!quit) {
       auto target = target_queue.front();
-      auto plan = planner.plan(target, gimbal.bullet_speed());
+      auto gs = gimbal.state();
+      auto plan = planner.plan(target, gs.bullet_speed);
 
-      plan_fire.store(plan.fire);
+      const double actual_yaw = gs.yaw;
+      const double actual_pitch = -gs.pitch;
+      const double yaw_error = std::abs(tools::limit_rad(actual_yaw - plan.target_yaw));
+      const double pitch_error = std::abs(actual_pitch - plan.target_pitch);
+
+      double fire_tolerance = first_tolerance;
+      if (target.has_value()) {
+        const auto x = target->ekf_x();
+        const double distance = std::hypot(x[0], x[2]);
+        fire_tolerance = distance > judge_distance ? second_tolerance : first_tolerance;
+      }
+      const bool actual_fire =
+        target.has_value()  && yaw_error < fire_tolerance && pitch_error < fire_tolerance;
+
+      plan_fire.store(actual_fire);
+      mpc_ready_fire.store(plan.fire);
+      fire_yaw_error.store(static_cast<float>(yaw_error));
+      fire_pitch_error.store(static_cast<float>(pitch_error));
       plan_yaw.store(plan.yaw);
       plan_pitch.store(plan.pitch);
       plan_yaw_vel.store(plan.yaw_vel);
@@ -78,10 +106,9 @@ int main(int argc, char * argv[])
       plan_pitch_acc.store(plan.pitch_acc);
 
       gimbal.send_mpc(
-        plan.fire, plan.yaw, plan.pitch, plan.yaw_vel, plan.yaw_acc, plan.pitch_vel,
+        actual_fire, plan.yaw, plan.pitch, plan.yaw_vel, plan.yaw_acc, plan.pitch_vel,
         plan.pitch_acc);
 
-      auto gs = gimbal.state();
       nlohmann::json data;
       data["t"] = tools::delta_time(std::chrono::steady_clock::now(), t0);
       data["gimbal_yaw"] = image_gimbal_yaw.load() * RAD_TO_DEG;
@@ -96,9 +123,7 @@ int main(int argc, char * argv[])
       data["plan_pitch"] = plan.pitch * RAD_TO_DEG;
       data["plan_pitch_vel"] = plan.pitch_vel * RAD_TO_DEG;
       data["plan_pitch_acc"] = plan.pitch_acc * RAD_TO_DEG;
-      data["fire"] = plan.fire ? 1 : 0;
-      data["fired"] = plan.fire ? 1 : 0;
-      data["bullet_speed"] = gimbal.bullet_speed();
+      data["fire"] = actual_fire ? 1 : 0;
 
       if (target.has_value()) {
         data["target_z"] = target->ekf_x()[4];
@@ -159,8 +184,9 @@ int main(int argc, char * argv[])
     tools::draw_text(
       img,
       fmt::format(
-        "MPC yaw/pitch: {:.2f}/{:.2f} deg | fire={}", plan_yaw.load() * RAD_TO_DEG,
-        plan_pitch.load() * RAD_TO_DEG, plan_fire.load() ? 1 : 0),
+        "MPC yaw/pitch: {:.2f}/{:.2f} deg | fire={} mpc={}", plan_yaw.load() * RAD_TO_DEG,
+        plan_pitch.load() * RAD_TO_DEG, plan_fire.load() ? 1 : 0,
+        mpc_ready_fire.load() ? 1 : 0),
       {10, 60}, {154, 50, 205});
     tools::draw_text(
       img, fmt::format("Tracker={}", tracker.state()), {10, 90}, {0, 255, 0});
