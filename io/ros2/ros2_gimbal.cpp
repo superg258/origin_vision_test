@@ -118,13 +118,13 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   uint8_t armor_id, double vx, double vy, double distance)
 {
   const bool fire_advice = control && fire;
-  const double big_yaw_deg = control ? rad2deg(big_yaw_rad) : 0.0;
-  const double small_yaw_deg = control ? rad2deg(small_yaw_rad) : 0.0;
-  const double pitch_deg = control ? rad2deg(-pitch_rad) : 0.0;
-  const double yaw_vel_deg = control ? rad2deg(yaw_vel_rad) : 0.0;
-  const double pitch_vel_deg = control ? rad2deg(-pitch_vel_rad) : 0.0;
-  const double yaw_acc_deg = control ? rad2deg(yaw_acc_rad) : 0.0;
-  const double pitch_acc_deg = control ? rad2deg(-pitch_acc_rad) : 0.0;
+  const double big_yaw = control ? big_yaw_rad : 0.0;
+  const double small_yaw = control ? small_yaw_rad : 0.0;
+  const double pitch = control ? -pitch_rad : 0.0;
+  const double yaw_vel = control ? yaw_vel_rad : 0.0;
+  const double pitch_vel = control ? -pitch_vel_rad : 0.0;
+  const double yaw_acc = control ? yaw_acc_rad : 0.0;
+  const double pitch_acc = control ? -pitch_acc_rad : 0.0;
 
   eprosima::fastcdr::FastBuffer buffer;
   eprosima::fastcdr::Cdr cdr(buffer);
@@ -144,13 +144,13 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   cdr << vy;
 
   cdr << fire_advice;
-  cdr << big_yaw_deg;
-  cdr << small_yaw_deg;
-  cdr << pitch_deg;
-  cdr << yaw_vel_deg;
-  cdr << pitch_vel_deg;
-  cdr << yaw_acc_deg;
-  cdr << pitch_acc_deg;
+  cdr << big_yaw;
+  cdr << small_yaw;
+  cdr << pitch;
+  cdr << yaw_vel;
+  cdr << pitch_vel;
+  cdr << yaw_acc;
+  cdr << pitch_acc;
   cdr << distance;
   const auto serialized_size = cdr.get_serialized_data_length();
   rclcpp::SerializedMessage message(serialized_size);
