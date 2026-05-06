@@ -160,6 +160,15 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   return message;
 }
 
+rclcpp::SerializedMessage serialize_gimbal_cmd(
+  const io::Command & command, double big_yaw_rad, double small_yaw_rad)
+{
+  return serialize_gimbal_mpc_cmd(
+    command.control, command.shoot, big_yaw_rad, small_yaw_rad, command.pitch, 0.0, 0.0, 0.0,
+    0.0, 0, 0.0, 0.0, 0.0); // 默认 ID=0, 速度=0
+}
+}  // namespace
+
 void ROS2Gimbal::send_mpc(
   bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
   double pitch_vel, double yaw_acc, double pitch_acc, uint8_t armor_id, double vx, double vy,
@@ -175,16 +184,6 @@ void ROS2Gimbal::send_mpc(
     tools::logger()->warn("[ROS2Gimbal] Failed to publish MPC gimbal cmd: {}", e.what());
   }
 }
-
-
-rclcpp::SerializedMessage serialize_gimbal_cmd(
-  const io::Command & command, double big_yaw_rad, double small_yaw_rad)
-{
-  return serialize_gimbal_mpc_cmd(
-    command.control, command.shoot, big_yaw_rad, small_yaw_rad, command.pitch, 0.0, 0.0, 0.0,
-    0.0, 0, 0.0, 0.0, 0.0); // 默认 ID=0, 速度=0
-}
-}  // namespace
 
 ROS2Gimbal::ROS2Gimbal(const std::string & config_path)
 {
