@@ -1,16 +1,13 @@
 #include <fmt/core.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <list>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -19,8 +16,9 @@
 #include "io/camera.hpp"
 #include "io/ros2/ros2_gimbal.hpp"
 #include "io/usbcamera/usbcamera.hpp"
+#include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
-#include "tasks/auto_aim/planner/planner.hpp"
+#include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -31,10 +29,7 @@
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
-#include "tools/thread_safe_queue.hpp"
 #include "tools/yaml.hpp"
-
-using namespace std::chrono_literals;
 
 namespace
 {
@@ -148,6 +143,30 @@ double angular_distance_deg(double lhs_rad, double rhs_rad)
   return std::abs(tools::limit_rad(lhs_rad - rhs_rad)) * 57.3;
 }
 
+uint8_t armor_name_to_nav_id(auto_aim::ArmorName name)
+{
+  switch (name) {
+    case auto_aim::ArmorName::one:
+      return 1;
+    case auto_aim::ArmorName::two:
+      return 2;
+    case auto_aim::ArmorName::three:
+      return 3;
+    case auto_aim::ArmorName::four:
+      return 4;
+    case auto_aim::ArmorName::five:
+      return 5;
+    case auto_aim::ArmorName::sentry:
+      return 7;
+    case auto_aim::ArmorName::base:
+      return 9;
+    case auto_aim::ArmorName::outpost:
+      return 10;
+    default:
+      return 0;
+  }
+}
+
 double nearest_continuous_yaw_rad(double wrapped_yaw_rad, double reference_yaw_rad)
 {
   return reference_yaw_rad + tools::limit_rad(wrapped_yaw_rad - reference_yaw_rad);
@@ -204,6 +223,23 @@ double horizon_distance(const auto_aim::Target & target)
   return std::sqrt(x[0] * x[0] + x[2] * x[2]);
 }
 
+void fill_nav_target_info(io::Command & command, const std::list<auto_aim::Target> & targets)
+{
+  command.armor_id = 0;
+  command.vx = 0.0;
+  command.vy = 0.0;
+  command.horizon_distance = 0.0;
+
+  if (!command.control || targets.empty()) return;
+
+  const auto & target = targets.front();
+  const auto x = target.ekf_x();
+  command.armor_id = armor_name_to_nav_id(target.name);
+  command.vx = x[1];
+  command.vy = x[3];
+  command.horizon_distance = horizon_distance(target);
+}
+
 void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 {
   tools::draw_text(
@@ -230,7 +266,7 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 }
 
 void draw_auto_aim_overlay(
-  cv::Mat & img, const std::list<auto_aim::Target> & targets, const auto_aim::Planner & planner,
+  cv::Mat & img, const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
   const auto_aim::Solver & solver)
 {
   if (targets.empty()) return;
@@ -242,10 +278,10 @@ void draw_auto_aim_overlay(
     tools::draw_points(img, image_points, {0, 255, 0});
   }
 
-  const Eigen::Vector4d aim_xyza = planner.debug_xyza;
+  const auto & aim_point = aimer.debug_aim_point;
   const auto aim_image_points =
-    solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-  tools::draw_points(img, aim_image_points, {0, 0, 255});
+    solver.reproject_armor(aim_point.xyza.head(3), aim_point.xyza[3], target.armor_type, target.name);
+  tools::draw_points(img, aim_image_points, aim_point.valid ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0));
 }
 
 cv::Mat resize_for_view(const cv::Mat & img)
@@ -336,8 +372,10 @@ int main(int argc, char * argv[])
   auto_aim::YOLO yolo_auto(config_path, yolo_debug, "auto_aim_device");
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
-  auto_aim::Planner planner(config_path);
+  auto_aim::Aimer aimer(config_path);
+  auto_aim::Shooter shooter(config_path);
   omniperception::Decider decider(config_path);
+  constexpr bool aimer_to_now = true;
 
   auto yolo_omni_left = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
   auto yolo_omni_right = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
@@ -349,71 +387,6 @@ int main(int argc, char * argv[])
   cam_left.device_name = left_cam_cfg.spec.label;
   cam_right.device_name = right_cam_cfg.spec.label;
   cam_back.device_name = back_cam_cfg.spec.label;
-
-  tools::ThreadSafeQueue<std::optional<auto_aim::Target>, true> target_queue(1);
-  target_queue.push(std::nullopt);
-
-  std::atomic<bool> quit{false};
-  std::atomic<bool> mpc_enabled{false};
-  std::atomic<uint64_t> mpc_generation{0};
-  std::atomic<bool> mpc_control{false};
-  std::atomic<bool> mpc_fire{false};
-  std::atomic<double> mpc_yaw{0.0};
-  std::atomic<double> mpc_pitch{0.0};
-  std::mutex gimbal_send_mutex;
-
-  std::thread mpc_thread([&]() {
-    while (!quit.load()) {
-      if (!mpc_enabled.load()) {
-        std::this_thread::sleep_for(10ms);
-        continue;
-      }
-
-      const auto local_generation = mpc_generation.load();
-      auto target = target_queue.front();
-      auto gs = gimbal->state();
-      auto plan = planner.plan(target, gs.bullet_speed);
-
-      if (!mpc_enabled.load() || local_generation != mpc_generation.load()) {
-        continue;
-      }
-
-      double big_yaw = plan.yaw;
-      double small_yaw = plan.yaw;
-      
-      uint8_t armor_id = 0;
-      double vx = 0.0;
-      double vy = 0.0;
-      double distance = 0.0;
-
-      if (target.has_value() && plan.control) {
-        big_yaw = target_center_big_yaw_rad(target.value(), gs.big_yaw);
-        small_yaw = plan.yaw;
-        
-        armor_id = static_cast<uint8_t>(std::max(0, target->last_id));
-        const auto ekf_x = target->ekf_x();
-        vx = ekf_x[1];
-        vy = ekf_x[3];
-        distance = std::sqrt(ekf_x[0] * ekf_x[0] + ekf_x[2] * ekf_x[2]);
-      }
-
-      mpc_control.store(plan.control);
-      mpc_fire.store(plan.fire);
-      mpc_yaw.store(small_yaw);
-      mpc_pitch.store(plan.pitch);
-
-      std::lock_guard<std::mutex> lk(gimbal_send_mutex);
-      if (!mpc_enabled.load() || local_generation != mpc_generation.load()) {
-        continue;
-      }
-      
-      gimbal->send_mpc(
-        plan.control, plan.fire, big_yaw, small_yaw, plan.pitch, plan.yaw_vel, plan.pitch_vel,
-        plan.yaw_acc, plan.pitch_acc, armor_id, vx, vy, distance);
-        
-      std::this_thread::sleep_for(10ms);
-    }
-  });
 
   cv::Mat main_img, left_img, right_img, back_img;
   std::chrono::steady_clock::time_point main_timestamp, ts_left, ts_right, ts_back;
@@ -445,27 +418,13 @@ int main(int argc, char * argv[])
     auto targets = tracker.track(armors, main_timestamp);
     const std::string tracker_state = tracker.state();
     const bool omni_mode = tracker_state == "lost";
-    const bool enable_mpc = !omni_mode && !targets.empty();
-
-    if (enable_mpc) {
-      target_queue.push(targets.front());
-      if (!mpc_enabled.exchange(true)) {
-        mpc_generation.fetch_add(1);
-      }
-    } else {
-      target_queue.push(std::nullopt);
-      if (mpc_enabled.exchange(false)) {
-        mpc_generation.fetch_add(1);
-        mpc_control.store(false);
-        mpc_fire.store(false);
-      }
-    }
 
     std::optional<OmniInferenceResult> best_omni_result;
     std::optional<double> omni_target_abs_yaw_deg;
     std::optional<double> omni_target_error_deg;
     bool omni_hold_applied = false;
     io::Command omni_command{false, false, 0.0, 0.0};
+    io::Command command{false, false, 0.0, 0.0};
 
     if (omni_mode) {
       auto read_omni_frame = [&](io::USBCamera & camera, cv::Mat & img,
@@ -560,13 +519,25 @@ int main(int argc, char * argv[])
         omni_target_error_deg = angular_distance_deg(omni_command.big_yaw, gimbal_state.big_yaw);
       }
 
-      std::lock_guard<std::mutex> lk(gimbal_send_mutex);
       gimbal->send(omni_command);
     } else {
       left_img.release();
       right_img.release();
       back_img.release();
       omni_hold_command.reset();
+
+      command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+      if (tracker_state == "tracking" && command.control && !targets.empty()) {
+        apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+      }
+      command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
+      fill_nav_target_info(command, targets);
+
+      const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
+      const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
+      gimbal->send_mpc(
+        command.control, command.shoot, big_yaw, small_yaw, command.pitch, 0.0, 0.0, 0.0, 0.0,
+        static_cast<uint8_t>(command.armor_id), command.vx, command.vy, command.horizon_distance);
     }
 
     nlohmann::json data;
@@ -577,10 +548,14 @@ int main(int argc, char * argv[])
     data["gimbal_small_yaw"] = gimbal_state.yaw * 57.3;
     data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
     data["bullet_speed"] = gimbal->bullet_speed();
-    data["mpc_control"] = mpc_control.load() ? 1 : 0;
-    data["mpc_fire"] = mpc_fire.load() ? 1 : 0;
-    data["mpc_yaw"] = mpc_yaw.load() * 57.3;
-    data["mpc_pitch"] = mpc_pitch.load() * 57.3;
+    data["mpc_control"] = command.control ? 1 : 0;
+    data["mpc_fire"] = command.shoot ? 1 : 0;
+    data["mpc_yaw"] = (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3;
+    data["mpc_pitch"] = command.pitch * 57.3;
+    data["target_armor_id"] = static_cast<int>(command.armor_id);
+    data["target_vx"] = command.vx;
+    data["target_vy"] = command.vy;
+    data["horizon_distance"] = command.horizon_distance;
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;
     if (omni_target_abs_yaw_deg.has_value()) data["omni_target_yaw"] = omni_target_abs_yaw_deg.value();
     if (omni_target_error_deg.has_value()) data["omni_target_error_deg"] = omni_target_error_deg.value();
@@ -589,12 +564,13 @@ int main(int argc, char * argv[])
 
     if (!display) continue;
 
-    draw_auto_aim_overlay(main_img, targets, planner, solver);
+    draw_auto_aim_overlay(main_img, targets, aimer, solver);
     tools::draw_text(main_img, fmt::format("[{}] mode={}", tracker_state, omni_mode ? "OMNI" : "MPC"),
       {10, 30}, {255, 255, 255}, 0.8, 2);
     tools::draw_text(main_img,
-      fmt::format("mpc yaw={:.2f} pitch={:.2f} fire={}", mpc_yaw.load() * 57.3,
-        mpc_pitch.load() * 57.3, mpc_fire.load() ? 1 : 0),
+      fmt::format("mpc yaw={:.2f} pitch={:.2f} fire={}",
+        (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3,
+        command.pitch * 57.3, command.shoot ? 1 : 0),
       {10, 60}, {154, 50, 205}, 0.8, 2);
     if (omni_target_abs_yaw_deg.has_value()) {
       tools::draw_text(main_img, fmt::format("omni target yaw={:.2f}", omni_target_abs_yaw_deg.value()),
@@ -628,12 +604,7 @@ int main(int argc, char * argv[])
     if (cv::waitKey(1) == 'q') break;
   }
 
-  quit.store(true);
-  if (mpc_thread.joinable()) mpc_thread.join();
-  {
-    std::lock_guard<std::mutex> lk(gimbal_send_mutex);
-    gimbal->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
-  }
+  gimbal->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
 
   return 0;
 }
