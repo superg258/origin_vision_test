@@ -106,12 +106,10 @@ struct ArmorTargetMask
 ArmorTargetMask read_nav_armor_target_mask()
 {
   ArmorTargetMask mask;
-
-  // TODO(nav): Replace this placeholder with the real navigation/electrical-control signal.
-  // Example: when navigation asks vision to attack base only:
+  // TODO(导航): 后续把这里替换成真实的导航/电控信号。
+  // 例如导航要求只打基地时：
   // mask.enabled = true;
   // mask.allowed_names = {auto_aim::ArmorName::base};
-
   return mask;
 }
 
