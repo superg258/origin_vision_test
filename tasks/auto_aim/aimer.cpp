@@ -18,6 +18,7 @@ namespace
 {
 constexpr double kBigArmorWidth = 230e-3;
 constexpr double kSmallArmorWidth = 135e-3;
+constexpr double kFixedArmorWidth = 129e-3;
 constexpr double kCenterPitchBias = 0.2;
 
 struct PlateEvaluation
@@ -114,6 +115,7 @@ bool Aimer::is_ground_four_armor_target(const Target & target) const
 
 double Aimer::armor_width_m(const Target & target) const
 {
+  if (target.name == ArmorName::outpost || target.name == ArmorName::base) return kFixedArmorWidth;
   return target.armor_type == ArmorType::big ? kBigArmorWidth : kSmallArmorWidth;
 }
 

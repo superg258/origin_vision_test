@@ -1,5 +1,7 @@
 #include "target.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <numeric>
 
@@ -205,7 +207,18 @@ void Target::canonicalize_four_armor_state(int * matched_id)
 void Target::update(const Armor & armor)
 {
   int id = -1;
-  match_armor_score(armor, &id);
+  int measured_outpost_layer = -1;
+  int previous_outpost_layer = -1;
+
+  if (name == ArmorName::outpost) {
+    previous_outpost_layer = outpost_last_layer_;
+    measured_outpost_layer = handle_outpost_observation(armor);
+    id = match_armor_id(
+      armor, armor_xyza_list(), measured_outpost_layer, previous_outpost_layer);
+  } else {
+    match_armor_score(armor, &id);
+  }
+
   if (id < 0) return;
 
   const bool observed_jump = id != 0;
@@ -234,9 +247,16 @@ void Target::update_ypda(const Armor & armor, int id)
   // Eigen::VectorXd R_dig{{4e-3, 4e-3, 1, 9e-2}};
   auto center_yaw = std::atan2(armor.xyz_in_world[1], armor.xyz_in_world[0]);
   auto delta_angle = tools::limit_rad(armor.ypr_in_world[0] - center_yaw);
-  Eigen::VectorXd R_dig{
-    {4e-3, 4e-3, log(std::abs(delta_angle) + 1) + 1,
-     log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 9e-2}};
+  Eigen::VectorXd R_dig;
+  if (name == ArmorName::outpost) {
+    R_dig = Eigen::VectorXd{
+      {0.02, 0.02, log(std::abs(delta_angle) + 1) + 3,
+       log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 0.5}};
+  } else {
+    R_dig = Eigen::VectorXd{
+      {4e-3, 4e-3, log(std::abs(delta_angle) + 1) + 1,
+       log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 9e-2}};
+  }
 
   //测量过程噪声偏差的方差
   Eigen::MatrixXd R = R_dig.asDiagonal();
@@ -263,6 +283,105 @@ void Target::update_ypda(const Armor & armor, int id)
   Eigen::VectorXd z{{ypd[0], ypd[1], ypd[2], ypr[0]}};  //获得观测量
 
   ekf_.update(z, H, R, h, z_subtract);
+}
+
+int Target::match_armor_id(
+  const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,
+  int measured_outpost_layer, int previous_outpost_layer) const
+{
+  if (name == ArmorName::outpost && armor_num_ == 3) {
+    return match_outpost_armor_id(armor, xyza_list, measured_outpost_layer, previous_outpost_layer);
+  }
+  return match_default_armor_id(armor, xyza_list);
+}
+
+int Target::match_default_armor_id(
+  const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list) const
+{
+  if (xyza_list.empty()) return -1;
+
+  int matched_id = -1;
+  double min_score = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < xyza_list.size(); ++i) {
+    const auto & xyza = xyza_list[i];
+    Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
+    const double score =
+      std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3])) +
+      std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
+
+    if (score < min_score) {
+      matched_id = static_cast<int>(i);
+      min_score = score;
+    }
+  }
+
+  return matched_id;
+}
+
+int Target::match_outpost_armor_id(
+  const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,
+  int measured_outpost_layer, int previous_outpost_layer) const
+{
+  if (xyza_list.empty()) return -1;
+
+  const auto clamp_layer = [&](int layer) -> int {
+    if (layer < 0 || layer >= armor_num_) return -1;
+    return layer;
+  };
+
+  measured_outpost_layer = clamp_layer(measured_outpost_layer);
+  previous_outpost_layer = clamp_layer(previous_outpost_layer);
+
+  const double spacing = OUTPOST_LAYER_SPACING;
+  const double z_gate = std::max(0.02, spacing * 0.45);
+  const auto normalized_square = [](double value, double gate) -> double {
+    const double safe_gate = (gate <= 1e-6) ? 1e-6 : gate;
+    const double normalized = value / safe_gate;
+    return normalized * normalized;
+  };
+
+  int best_id = 0;
+  double best_score = std::numeric_limits<double>::infinity();
+
+  for (std::size_t i = 0; i < xyza_list.size(); ++i) {
+    const auto & xyza = xyza_list[i];
+    Eigen::Vector3d predicted_ypd = tools::xyz2ypd(xyza.head(3));
+
+    const double yaw_err = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3]));
+    const double bearing_err = std::abs(tools::limit_rad(armor.ypd_in_world[0] - predicted_ypd[0]));
+    const double pitch_err = std::abs(tools::limit_rad(armor.ypd_in_world[1] - predicted_ypd[1]));
+    const double dist_err = std::abs(armor.ypd_in_world[2] - predicted_ypd[2]);
+    const double z_err = std::abs(armor.xyz_in_world[2] - xyza[2]);
+
+    double score =
+      0.8 * normalized_square(yaw_err, 0.35) +
+      0.6 * normalized_square(bearing_err, 0.35) +
+      0.4 * normalized_square(pitch_err, 0.25) +
+      0.3 * normalized_square(dist_err, 0.45) +
+      3.0 * normalized_square(z_err, z_gate);
+
+    const int idx = static_cast<int>(i);
+    if (measured_outpost_layer >= 0) {
+      const int diff = std::abs(idx - measured_outpost_layer);
+      if (diff == 0) {
+        score *= 0.6;
+      } else if (diff == 1) {
+        score += 0.5;
+      } else {
+        score += 1.5;
+      }
+    } else if (previous_outpost_layer >= 0) {
+      const int diff_prev = std::abs(idx - previous_outpost_layer);
+      if (diff_prev >= 2) score += 0.5;
+    }
+
+    if (score < best_score) {
+      best_score = score;
+      best_id = idx;
+    }
+  }
+
+  return best_id;
 }
 
 Eigen::VectorXd Target::ekf_x() const { return ekf_.x; }
@@ -311,11 +430,17 @@ Eigen::Vector3d Target::h_armor_xyz(const Eigen::VectorXd & x, int id) const
 {
   auto angle = tools::limit_rad(x[6] + id * 2 * CV_PI / armor_num_);
   auto use_l_h = (armor_num_ == 4) && (id == 1 || id == 3);
+  auto is_outpost = (name == ArmorName::outpost) && (armor_num_ == 3);
 
   auto r = (use_l_h) ? x[8] + x[9] : x[8];
   auto armor_x = x[0] - r * std::cos(angle);
   auto armor_y = x[2] - r * std::sin(angle);
-  auto armor_z = (use_l_h) ? x[4] + x[10] : x[4];
+  auto armor_z = x[4];
+  if (use_l_h) {
+    armor_z += x[10];
+  } else if (is_outpost) {
+    armor_z += OUTPOST_LAYER_SPACING * static_cast<double>(id);
+  }
 
   return {armor_x, armor_y, armor_z};
 }
@@ -360,5 +485,136 @@ Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
 }
 
 bool Target::checkinit() { return isinit; }
+
+int Target::handle_outpost_observation(const Armor & armor)
+{
+  if (armor_num_ != 3) return -1;
+
+  const double spacing = OUTPOST_LAYER_SPACING;
+  const double z_meas = armor.xyz_in_world[2];
+  const double base_state = ekf_.x[4];
+  const double base_weight = outpost_base_initialized_ ? 0.5 : 0.0;
+
+  double best_score = std::numeric_limits<double>::infinity();
+  int best_layer = 0;
+  double best_candidate_base = base_state;
+
+  for (int layer = 0; layer < armor_num_; ++layer) {
+    const double layer_d = static_cast<double>(layer);
+    const double candidate_base = z_meas - spacing * layer_d;
+    const double expected_z = base_state + spacing * layer_d;
+    const double observation_error = std::abs(z_meas - expected_z);
+    const double base_penalty = std::abs(candidate_base - base_state);
+    const double score = observation_error + base_weight * base_penalty;
+
+    if (score < best_score) {
+      best_score = score;
+      best_layer = layer;
+      best_candidate_base = candidate_base;
+    }
+  }
+
+  const double expected_base = z_meas - spacing * static_cast<double>(best_layer);
+  const double max_base_error = spacing * 0.3;
+  best_candidate_base = std::clamp(
+    best_candidate_base, expected_base - max_base_error, expected_base + max_base_error);
+
+  const double tolerance = spacing * 0.2;
+  const double smooth_alpha = 0.3;
+
+  if (!outpost_base_initialized_) {
+    ekf_.x[4] = best_candidate_base;
+    ekf_.x[5] = 0.0;
+    outpost_base_initialized_ = true;
+  } else {
+    const double delta = best_candidate_base - ekf_.x[4];
+
+    if (std::abs(delta) < tolerance) {
+      ekf_.x[4] = (1.0 - smooth_alpha) * ekf_.x[4] + smooth_alpha * best_candidate_base;
+    } else if (best_score < spacing * 0.1) {
+      ekf_.x[4] = 0.5 * ekf_.x[4] + 0.5 * best_candidate_base;
+      ekf_.x[5] = 0.0;
+    } else {
+      ekf_.x[4] = 0.9 * ekf_.x[4] + 0.1 * best_candidate_base;
+    }
+  }
+
+  outpost_last_layer_ = best_layer;
+  update_outpost_cache(best_layer, z_meas);
+  maybe_rebaseline_outpost();
+  return best_layer;
+}
+
+void Target::update_outpost_cache(int layer, double z_meas)
+{
+  outpost_recent_layers_.emplace_back(layer, z_meas);
+  if (outpost_recent_layers_.size() > OUTPOST_CACHE_LIMIT) {
+    outpost_recent_layers_.pop_front();
+  }
+}
+
+void Target::maybe_rebaseline_outpost()
+{
+  if (outpost_recent_layers_.size() < 3) return;
+
+  const double spacing = OUTPOST_LAYER_SPACING;
+  const double tolerance = spacing * 0.15;
+
+  std::vector<double> candidates;
+  std::vector<double> weights;
+
+  for (std::size_t i = 0; i < outpost_recent_layers_.size(); ++i) {
+    for (std::size_t j = i + 1; j < outpost_recent_layers_.size(); ++j) {
+      const auto & obs_i = outpost_recent_layers_[i];
+      const auto & obs_j = outpost_recent_layers_[j];
+
+      const int layer_i = obs_i.first;
+      const int layer_j = obs_j.first;
+      const double z_i = obs_i.second;
+      const double z_j = obs_j.second;
+
+      if (layer_i == layer_j) continue;
+
+      const int layer_diff = layer_j - layer_i;
+      const double expected_z_diff = spacing * static_cast<double>(layer_diff);
+      const double actual_z_diff = z_j - z_i;
+      const double diff_error = std::abs(actual_z_diff - expected_z_diff);
+      if (diff_error > tolerance) continue;
+
+      const double base_i = z_i - spacing * static_cast<double>(layer_i);
+      const double base_j = z_j - spacing * static_cast<double>(layer_j);
+      candidates.push_back(0.5 * (base_i + base_j));
+      weights.push_back(static_cast<double>(std::abs(layer_diff)) / (1.0 + diff_error));
+    }
+  }
+
+  if (candidates.empty()) return;
+
+  double weighted_sum = 0.0;
+  double weight_sum = 0.0;
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    weighted_sum += candidates[i] * weights[i];
+    weight_sum += weights[i];
+  }
+  const double new_base = weighted_sum / weight_sum;
+
+  double variance = 0.0;
+  for (const double candidate : candidates) {
+    const double diff = candidate - new_base;
+    variance += diff * diff;
+  }
+  const double std_dev = std::sqrt(variance / static_cast<double>(candidates.size()));
+
+  if (std_dev < spacing * 0.1) {
+    const double delta = new_base - ekf_.x[4];
+    const double update_threshold = spacing * 0.05;
+
+    if (std::abs(delta) > update_threshold) {
+      const double alpha = std::min(0.5, std_dev < spacing * 0.05 ? 0.7 : 0.3);
+      ekf_.x[4] = (1.0 - alpha) * ekf_.x[4] + alpha * new_base;
+      outpost_base_initialized_ = true;
+    }
+  }
+}
 
 }  // namespace auto_aim

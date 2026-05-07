@@ -1,11 +1,11 @@
-enemy_color: "red"
-#enemy_color: "blue"
+#enemy_color: "red"
+enemy_color: "blue"
 
 #####-----感知与模型参数-----#####
 yolo_name: yolov5
 classify_model: assets/tiny_resnet.onnx
 yolov5_model_path: assets/yolov5_0526.xml
-device: GPU
+device: CPU
 threshold: 150
 min_confidence: 0.8
 use_traditional: true

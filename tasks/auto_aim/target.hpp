@@ -3,9 +3,11 @@
 
 #include <Eigen/Dense>
 #include <chrono>
+#include <deque>
 #include <optional>
 #include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "armor.hpp"
@@ -13,6 +15,8 @@
 
 namespace auto_aim
 {
+
+constexpr double OUTPOST_LAYER_SPACING = 0.1;
 
 class Target
 {
@@ -57,11 +61,29 @@ private:
   tools::ExtendedKalmanFilter ekf_;
   std::chrono::steady_clock::time_point t_;
 
+  bool outpost_base_initialized_ = false;
+  int outpost_last_layer_ = -1;
+  std::deque<std::pair<int, double>> outpost_recent_layers_;
+  static constexpr std::size_t OUTPOST_CACHE_LIMIT = 6;
+
   void canonicalize_four_armor_state(int * matched_id = nullptr);
   void update_ypda(const Armor & armor, int id);  // yaw pitch distance angle
 
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
   Eigen::MatrixXd h_jacobian(const Eigen::VectorXd & x, int id) const;
+
+  int handle_outpost_observation(const Armor & armor);
+  void update_outpost_cache(int layer, double z_meas);
+  void maybe_rebaseline_outpost();
+
+  int match_armor_id(
+    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,
+    int measured_outpost_layer, int previous_outpost_layer) const;
+  int match_default_armor_id(
+    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list) const;
+  int match_outpost_armor_id(
+    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,
+    int measured_outpost_layer, int previous_outpost_layer) const;
 };
 
 }  // namespace auto_aim
