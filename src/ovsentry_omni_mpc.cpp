@@ -18,6 +18,7 @@
 #include "io/usbcamera/usbcamera.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
+#include "tasks/auto_aim/planner/planner.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -372,6 +373,7 @@ int main(int argc, char * argv[])
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
+  auto_aim::Planner planner(config_path);
   omniperception::Decider decider(config_path);
   constexpr bool aimer_to_now = true;
 
@@ -531,11 +533,26 @@ int main(int argc, char * argv[])
       command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
       fill_nav_target_info(command, targets);
 
+      double small_yaw_vel = 0.0;
+      double pitch_vel = 0.0;
+      double small_yaw_acc = 0.0;
+      double pitch_acc = 0.0;
+      if (command.control && !targets.empty()) {
+        const auto mpc_plan = planner.plan(targets.front(), gimbal->bullet_speed());
+        if (mpc_plan.control) {
+          small_yaw_vel = mpc_plan.yaw_vel;
+          pitch_vel = mpc_plan.pitch_vel;
+          small_yaw_acc = mpc_plan.yaw_acc;
+          pitch_acc = mpc_plan.pitch_acc;
+        }
+      }
+
       const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
       const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
       gimbal->send_mpc(
-        command.control, command.shoot, big_yaw, small_yaw, command.pitch, 0.0, 0.0, 0.0, 0.0,
-        static_cast<uint8_t>(command.armor_id), command.vx, command.vy, command.horizon_distance);
+        command.control, command.shoot, big_yaw, small_yaw, command.pitch, small_yaw_vel,
+        pitch_vel, small_yaw_acc, pitch_acc, static_cast<uint8_t>(command.armor_id), command.vx,
+        command.vy, command.horizon_distance);
     }
 
     nlohmann::json data;
