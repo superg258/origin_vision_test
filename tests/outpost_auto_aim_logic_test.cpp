@@ -200,6 +200,16 @@ int main()
           "outpost layer spacing between layer 0 and 2 should be 0.2m")) {
       return 1;
     }
+    if (!expect_near(
+          tools::limit_rad(initial_xyza[0][3] - initial_xyza[1][3]), 2 * CV_PI / 3, 1e-6,
+          "outpost low layer should be 120deg after middle layer")) {
+      return 1;
+    }
+    if (!expect_near(
+          tools::limit_rad(initial_xyza[2][3] - initial_xyza[1][3]), -2 * CV_PI / 3, 1e-6,
+          "outpost high layer should be 120deg before middle layer")) {
+      return 1;
+    }
 
     auto observed_layer_2 = make_world_armor(
       auto_aim::ArmorName::outpost, auto_aim::ArmorType::small, initial_xyza[2].head(3),
