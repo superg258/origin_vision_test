@@ -12,6 +12,7 @@ find_package(Eigen3 REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(fastcdr QUIET)
 set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake/")
 find_package(OpenVINO REQUIRED)
 
@@ -139,6 +140,9 @@ target_link_libraries(normal_auto_aim_v2_logic_test ${OpenCV_LIBS} fmt::fmt yaml
 
 add_executable(pattern_geometry_test tests/pattern_geometry_test.cpp)
 target_link_libraries(pattern_geometry_test ${OpenCV_LIBS})
+
+add_executable(armor_type_logic_test tests/armor_type_logic_test.cpp)
+target_link_libraries(armor_type_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/local/local_tests.cmake OPTIONAL)
 

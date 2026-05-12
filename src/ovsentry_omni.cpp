@@ -778,6 +778,28 @@ int main(int argc, char * argv[])
       data["cmd_big_yaw"] = command.big_yaw * 57.3;
       data["cmd_small_yaw"] = command.small_yaw * 57.3;
     }
+    if (!targets.empty()) {
+      const auto & target = targets.front();
+      const Eigen::VectorXd x = target.ekf_x();
+      data["ekf_x"] = x[0];
+      data["ekf_vx"] = x[1];
+      data["ekf_y"] = x[2];
+      data["ekf_vy"] = x[3];
+      data["ekf_z"] = x[4];
+      data["ekf_vz"] = x[5];
+      data["ekf_a"] = x[6] * 57.3;
+      data["ekf_w"] = x[7];
+      data["last_id"] = target.last_id;
+      data["aim_id"] = aimer.debug_aim_point.armor_id;
+      data["aim_source"] = aimer.debug_aim_point.source;
+      for (const auto & key :
+           {"outpost_selected_id", "outpost_layer_residual", "outpost_phase_residual",
+            "outpost_center_speed", "outpost_layer_locked", "init_best_score", "init_margin",
+            "init_distinct_layers", "init_z_vz", "init_z_max_residual"}) {
+        const auto iter = target.ekf().data.find(key);
+        if (iter != target.ekf().data.end()) data[key] = iter->second;
+      }
+    }
     data["horizon_distance"] = command.horizon_distance;
     data["target_armor_id"] = static_cast<int>(command.armor_id);
     data["target_vx"] = command.vx;

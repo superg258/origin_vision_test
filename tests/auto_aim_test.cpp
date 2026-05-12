@@ -42,6 +42,14 @@ int main(int argc, char * argv[])
   auto text_path = fmt::format("{}.txt", input_path);
   cv::VideoCapture video(video_path);
   std::ifstream text(text_path);
+  if (!video.isOpened()) {
+    tools::logger()->error("[auto_aim_test] failed to open video: {}", video_path);
+    return 1;
+  }
+  if (!text.is_open()) {
+    tools::logger()->error("[auto_aim_test] failed to open pose txt: {}", text_path);
+    return 1;
+  }
 
   auto_aim::YOLO yolo(config_path);
   auto_aim::Solver solver(config_path);
@@ -55,10 +63,17 @@ int main(int argc, char * argv[])
   io::Command last_command;
   double last_t = -1;
 
-  video.set(cv::CAP_PROP_POS_FRAMES, start_index);
   for (int i = 0; i < start_index; i++) {
+    video.read(img);
+    if (img.empty()) {
+      tools::logger()->warn("[auto_aim_test] video ended while skipping to frame {}", start_index);
+      return 0;
+    }
     double t, w, x, y, z;
-    text >> t >> w >> x >> y >> z;
+    if (!(text >> t >> w >> x >> y >> z)) {
+      tools::logger()->warn("[auto_aim_test] pose txt ended while skipping to frame {}", start_index);
+      return 0;
+    }
   }
 
   for (int frame_count = start_index; !exiter.exit(); frame_count++) {
@@ -68,7 +83,10 @@ int main(int argc, char * argv[])
     if (img.empty()) break;
 
     double t, w, x, y, z;
-    text >> t >> w >> x >> y >> z;
+    if (!(text >> t >> w >> x >> y >> z)) {
+      tools::logger()->warn("[auto_aim_test] pose txt ended at frame {}", frame_count);
+      break;
+    }
     auto timestamp = t0 + std::chrono::microseconds(int(t * 1e6));
 
     /// 自瞄核心逻辑
@@ -114,6 +132,8 @@ int main(int argc, char * argv[])
       {10, 90}, {255, 255, 255});
 
     nlohmann::json data;
+    data["frame"] = frame_count;
+    data["tracker_state"] = tracker.state();
 
     // 装甲板原始观测数据
     data["armor_num"] = armors.size();
@@ -130,7 +150,9 @@ int main(int argc, char * argv[])
     Eigen::Quaternion q{w, x, y, z};
     auto yaw = tools::eulers(q, 2, 1, 0)[0];
     data["gimbal_yaw"] = yaw * 57.3;
+    data["cmd_control"] = command.control;
     data["cmd_yaw"] = command.yaw * 57.3;
+    data["cmd_pitch"] = command.pitch * 57.3;
     data["shoot"] = command.shoot;
 
     if (!targets.empty()) {
@@ -184,6 +206,17 @@ int main(int argc, char * argv[])
       data["nis_fail"] = target.ekf().data.at("nis_fail");
       data["nees_fail"] = target.ekf().data.at("nees_fail");
       data["recent_nis_failures"] = target.ekf().data.at("recent_nis_failures");
+      data["aim_id"] = aim_point.armor_id;
+      data["aim_source"] = aim_point.source;
+      for (const auto & key :
+           {"outpost_selected_id", "outpost_layer_residual", "outpost_phase_residual",
+            "outpost_center_speed", "outpost_layer_locked", "init_best_score", "init_margin",
+            "init_distinct_layers", "init_z_vz", "init_z_max_residual", "assoc_best_id",
+            "assoc_best_score", "assoc_score_0", "assoc_score_1", "assoc_score_2",
+            "assoc_reject_reason"}) {
+        const auto iter = target.ekf().data.find(key);
+        if (iter != target.ekf().data.end()) data[key] = iter->second;
+      }
     }
 
     plotter.plot(data);

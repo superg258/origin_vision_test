@@ -2,13 +2,12 @@
 #define AUTO_AIM__TARGET_HPP
 
 #include <Eigen/Dense>
+#include <array>
 #include <chrono>
 #include <deque>
 #include <limits>
 #include <optional>
-#include <queue>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "armor.hpp"
@@ -36,7 +35,7 @@ public:
 
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
-  void update(const Armor & armor);
+  void update(const Armor & armor, std::optional<int> forced_id = std::nullopt);
 
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;
@@ -44,6 +43,10 @@ public:
   bool has_last_observed_armor() const;
   Eigen::Vector4d last_observed_armor_xyza() const;
   double last_observed_age() const;
+  bool outpost_layer_locked() const;
+  void set_outpost_association_debug(
+    int best_id, const std::array<double, 3> & scores, double best_score,
+    const std::string & reject_reason);
 
   bool diverged() const;
   bool convergened();
@@ -65,20 +68,28 @@ private:
   Eigen::Vector4d last_observed_armor_xyza_{Eigen::Vector4d::Zero()};
   double last_observed_age_s_ = std::numeric_limits<double>::infinity();
 
-  bool outpost_base_initialized_ = false;
+  struct OutpostObservation
+  {
+    std::chrono::steady_clock::time_point t;
+    Eigen::Vector3d xyz;
+    Eigen::Vector3d center;
+    double yaw = 0.0;
+  };
+
+  bool outpost_layer_locked_ = true;
   int outpost_last_layer_ = 0;
-  std::deque<std::pair<int, double>> outpost_recent_layers_;
-  static constexpr std::size_t OUTPOST_CACHE_LIMIT = 6;
+  std::deque<OutpostObservation> outpost_init_observations_;
+  static constexpr std::size_t OUTPOST_INIT_CACHE_LIMIT = 12;
 
   void update_ypda(const Armor & armor, int id);
   void record_observed_armor(const Armor & armor);
+  bool is_outpost_model() const;
+  Eigen::Vector3d outpost_center_from_armor(const Armor & armor) const;
+  void observe_unlocked_outpost(const Armor & armor);
+  bool try_lock_outpost_layers();
 
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
   Eigen::MatrixXd h_jacobian(const Eigen::VectorXd & x, int id) const;
-
-  int handle_outpost_observation(const Armor & armor);
-  void update_outpost_cache(int layer, double z_meas);
-  void maybe_rebaseline_outpost();
 
   int match_armor_id(
     const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,

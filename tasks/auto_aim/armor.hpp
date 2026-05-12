@@ -20,9 +20,10 @@ const std::vector<std::string> COLORS = {"red", "blue", "extinguish", "purple"};
 enum ArmorType
 {
   big,
-  small
+  small,
+  base_outpost
 };
-const std::vector<std::string> ARMOR_TYPES = {"big", "small"};
+const std::vector<std::string> ARMOR_TYPES = {"big", "small", "base_outpost"};
 
 enum ArmorName
 {
@@ -38,6 +39,30 @@ enum ArmorName
 };
 const std::vector<std::string> ARMOR_NAMES = {"one",    "two",     "three", "four",     "five",
                                               "sentry", "outpost", "base",  "not_armor"};
+
+inline bool is_base_outpost_name(ArmorName name)
+{
+  return name == ArmorName::outpost || name == ArmorName::base;
+}
+
+inline ArmorType default_type_for_name(ArmorName name)
+{
+  if (is_base_outpost_name(name)) return ArmorType::base_outpost;
+  if (name == ArmorName::one) return ArmorType::big;
+  return ArmorType::small;
+}
+
+inline bool is_valid_type_for_name(ArmorName name, ArmorType type)
+{
+  if (is_base_outpost_name(name)) return type == ArmorType::base_outpost;
+  if (type == ArmorType::base_outpost) return false;
+  if (name == ArmorName::one) return type == ArmorType::big;
+  if (name == ArmorName::two || name == ArmorName::sentry) return type == ArmorType::small;
+  if (name == ArmorName::three || name == ArmorName::four || name == ArmorName::five) {
+    return type == ArmorType::small || type == ArmorType::big;
+  }
+  return false;
+}
 
 enum ArmorPriority
 {
@@ -56,9 +81,9 @@ const std::vector<std::tuple<Color, ArmorName, ArmorType>> armor_properties = {
   {blue, three, small},      {red, three, small},      {extinguish, three, small},
   {blue, four, small},       {red, four, small},       {extinguish, four, small},
   {blue, five, small},       {red, five, small},       {extinguish, five, small},
-  {blue, outpost, small},    {red, outpost, small},    {extinguish, outpost, small},
-  {blue, base, big},         {red, base, big},         {extinguish, base, big},      {purple, base, big},       
-  {blue, base, small},       {red, base, small},       {extinguish, base, small},    {purple, base, small},    
+  {blue, outpost, base_outpost}, {red, outpost, base_outpost}, {extinguish, outpost, base_outpost},
+  {blue, base, base_outpost},    {red, base, base_outpost},    {extinguish, base, base_outpost}, {purple, base, base_outpost},
+  {blue, base, base_outpost},    {red, base, base_outpost},    {extinguish, base, base_outpost}, {purple, base, base_outpost},
   {blue, three, big},        {red, three, big},        {extinguish, three, big}, 
   {blue, four, big},         {red, four, big},         {extinguish, four, big},  
   {blue, five, big},         {red, five, big},         {extinguish, five, big}};

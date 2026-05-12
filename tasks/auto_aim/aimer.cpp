@@ -70,6 +70,12 @@ io::Command Aimer::aim(
     return {false, false, 0, 0};
   }
 
+  if (target.name == ArmorName::outpost && !target.outpost_layer_locked()) {
+    const double yaw = std::atan2(xyz0.y(), xyz0.x()) + yaw_offset_;
+    const double pitch = -(trajectory0.pitch + pitch_offset_);
+    return {true, false, yaw, pitch};
+  }
+
   double prev_fly_time = trajectory0.fly_time;
   tools::Trajectory current_traj = trajectory0;
   std::vector<Target> iteration_target(10, target);
@@ -155,6 +161,13 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   if (armor_num == 0) {
     lock_id_ = -1;
     return make_point(false, Eigen::Vector4d::Zero(), -1, SRC_INVALID);
+  }
+  if (target.name == ArmorName::outpost && !target.outpost_layer_locked()) {
+    lock_id_ = -1;
+    if (!target.has_last_observed_armor() || target.last_observed_age() > 0.14) {
+      return make_point(false, Eigen::Vector4d::Zero(), -1, SRC_INVALID);
+    }
+    return make_point(true, target.last_observed_armor_xyza(), 0, SRC_OBSERVED_DIRECT);
   }
   if (armor_num == 1) {
     lock_id_ = -1;
@@ -242,8 +255,6 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   const int obs_match_id = obs_fresh ? closest_id_to_obs(obs_xyza) : -1;
   const auto abs_vyaw = std::abs(vyaw);
 
-  lock_id_ = -1;
-
   std::vector<int> direct_ids;
   for (size_t i = 0; i < armor_num; ++i) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
@@ -253,20 +264,36 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   }
 
   if (!direct_ids.empty()) {
-    if (abs_vyaw < 1.2 && obs_match_id >= 0 && contains_id(direct_ids, obs_match_id)) {
-      return make_point(true, armor_xyza_list[obs_match_id], obs_match_id, SRC_DIRECT_OBS_MATCH);
-    }
     if (
+      lock_id_ >= 0 && lock_id_ < static_cast<int>(armor_num) && contains_id(direct_ids, lock_id_) &&
+      std::abs(delta_angle_list[lock_id_]) < coming_angle - 5.0 / 57.3)
+    {
+      return make_point(true, armor_xyza_list[lock_id_], lock_id_, SRC_DIRECT_LOCKED);
+    }
+
+    int chosen = -1;
+    int source = SRC_DIRECT_MIN_SWING;
+    if (abs_vyaw < 1.2 && obs_match_id >= 0 && contains_id(direct_ids, obs_match_id)) {
+      chosen = obs_match_id;
+      source = SRC_DIRECT_OBS_MATCH;
+    } else if (
       abs_vyaw < 1.2 && target.last_id >= 0 && target.last_id < static_cast<int>(armor_num) &&
       contains_id(direct_ids, target.last_id))
     {
-      return make_point(true, armor_xyza_list[target.last_id], target.last_id, SRC_DIRECT_LAST_ID);
+      chosen = target.last_id;
+      source = SRC_DIRECT_LAST_ID;
+    } else {
+      chosen = choose_min_swing_id(direct_ids);
     }
-    const int chosen = choose_min_swing_id(direct_ids);
-    return make_point(true, armor_xyza_list[chosen], chosen, SRC_DIRECT_MIN_SWING);
+
+    lock_id_ = chosen;
+    return make_point(true, armor_xyza_list[chosen], chosen, source);
   }
 
-  if (abs_vyaw < 1e-3) return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+  if (abs_vyaw < 1e-3) {
+    lock_id_ = -1;
+    return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+  }
 
   const double wait_angle = (vyaw > 0) ? -coming_angle : coming_angle;
   const double max_out_angle = leaving_angle;
@@ -285,7 +312,10 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     }
   }
 
-  if (indirect_id < 0) return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+  if (indirect_id < 0) {
+    lock_id_ = -1;
+    return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
+  }
 
   double emerge_time = min_armor_to_wait / (abs_vyaw + 1e-3);
   emerge_time = std::clamp(emerge_time, 0.0, 0.35);
@@ -294,9 +324,11 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   future_target.predict(emerge_time);
   const auto future_xyza_list = future_target.armor_xyza_list();
   if (indirect_id >= static_cast<int>(future_xyza_list.size())) {
+    lock_id_ = -1;
     return make_point(false, armor_xyza_list[0], -1, SRC_INVALID);
   }
 
+  lock_id_ = indirect_id;
   return make_point(true, future_xyza_list[indirect_id], indirect_id, SRC_INDIRECT);
 }
 

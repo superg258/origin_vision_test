@@ -34,7 +34,8 @@ const std::vector<cv::Point3f> FIXED_ARMOR_POINTS{
 
 const std::vector<cv::Point3f> & select_object_points(ArmorName name, ArmorType type)
 {
-  if (name == ArmorName::outpost || name == ArmorName::base) {
+  (void)name;
+  if (type == ArmorType::base_outpost) {
     return FIXED_ARMOR_POINTS;
   }
   return (type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;

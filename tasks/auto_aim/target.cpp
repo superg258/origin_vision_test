@@ -13,11 +13,66 @@ namespace auto_aim
 {
 namespace
 {
+constexpr double OUTPOST_RULE_SPEED = 0.8 * CV_PI;
+constexpr double NORMAL_TRANSLATION_PROCESS_NOISE = 100.0;
+constexpr double NORMAL_YAW_PROCESS_NOISE = 400.0;
+constexpr double OUTPOST_XY_PROCESS_NOISE = 640.0;
+constexpr double OUTPOST_Z_PROCESS_NOISE = 40.0;
+constexpr double OUTPOST_YAW_PROCESS_NOISE = 4.0;
+constexpr double OUTPOST_INIT_Z_RESIDUAL_GATE = 0.035;
+constexpr double OUTPOST_INIT_Z_MAX_RESIDUAL = 0.075;
+constexpr double OUTPOST_INIT_Z_VELOCITY_GATE = 1.2;
+constexpr double OUTPOST_INIT_Z_MAX_VELOCITY = 3.5;
+
 double armor_angle_offset(int id, int armor_num, ArmorName name)
 {
   const double step = 2 * CV_PI / armor_num;
   const int signed_id = (name == ArmorName::outpost && armor_num == 3) ? -id : id;
   return static_cast<double>(signed_id) * step;
+}
+
+double normalized_square(double value, double gate)
+{
+  const double safe_gate = (gate <= 1e-6) ? 1e-6 : gate;
+  const double normalized = value / safe_gate;
+  return normalized * normalized;
+}
+
+struct LineFitResult
+{
+  double intercept = 0.0;
+  double slope = 0.0;
+  double residual_score = 0.0;
+  double max_abs_residual = 0.0;
+};
+
+LineFitResult fit_line(const std::vector<double> & times, const std::vector<double> & values)
+{
+  LineFitResult result;
+  if (times.empty() || times.size() != values.size()) return result;
+
+  const double inv_n = 1.0 / static_cast<double>(times.size());
+  const double mean_t = std::accumulate(times.begin(), times.end(), 0.0) * inv_n;
+  const double mean_v = std::accumulate(values.begin(), values.end(), 0.0) * inv_n;
+
+  double variance_t = 0.0;
+  double covariance_tv = 0.0;
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const double dt = times[i] - mean_t;
+    variance_t += dt * dt;
+    covariance_tv += dt * (values[i] - mean_v);
+  }
+
+  result.slope = variance_t > 1e-9 ? covariance_tv / variance_t : 0.0;
+  result.intercept = mean_v - result.slope * mean_t;
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const double residual = values[i] - (result.intercept + result.slope * times[i]);
+    result.max_abs_residual = std::max(result.max_abs_residual, std::abs(residual));
+    result.residual_score += normalized_square(residual, OUTPOST_INIT_Z_RESIDUAL_GATE);
+  }
+
+  return result;
 }
 }  // namespace
 
@@ -54,6 +109,20 @@ Target::Target(
   };
 
   ekf_ = tools::ExtendedKalmanFilter(x0, P0, x_add);
+
+  if (name == ArmorName::outpost && armor_num_ == 3) {
+    outpost_layer_locked_ = false;
+    last_id = -1;
+    record_observed_armor(armor);
+    outpost_init_observations_.push_back(
+      OutpostObservation{t, xyz, outpost_center_from_armor(armor), ypr[0]});
+    ekf_.data["outpost_layer_locked"] = 0.0;
+    ekf_.data["init_best_score"] = std::numeric_limits<double>::infinity();
+    ekf_.data["init_margin"] = 0.0;
+    ekf_.data["init_distinct_layers"] = 1.0;
+    ekf_.data["init_z_vz"] = 0.0;
+    ekf_.data["init_z_max_residual"] = 0.0;
+  }
 }
 
 Target::Target(double x, double vyaw, double radius, double h) : armor_num_(4)
@@ -100,25 +169,27 @@ void Target::predict(double dt)
   };
   // clang-format on
 
-  double v1 = 100.0;
-  double v2 = 400.0;
+  double q_xy = NORMAL_TRANSLATION_PROCESS_NOISE;
+  double q_z = NORMAL_TRANSLATION_PROCESS_NOISE;
+  double q_yaw = NORMAL_YAW_PROCESS_NOISE;
   if (name == ArmorName::outpost) {
-    v1 = 10.0;
-    v2 = 0.1;
+    q_xy = OUTPOST_XY_PROCESS_NOISE;
+    q_z = OUTPOST_Z_PROCESS_NOISE;
+    q_yaw = OUTPOST_YAW_PROCESS_NOISE;
   }
   const auto a = dt * dt * dt * dt / 4;
   const auto b = dt * dt * dt / 2;
   const auto c = dt * dt;
   // clang-format off
   Eigen::MatrixXd Q{
-    {a * v1, b * v1,      0,      0,      0,      0,      0,      0, 0, 0, 0},
-    {b * v1, c * v1,      0,      0,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0, a * v1, b * v1,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0, b * v1, c * v1,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0, a * v1, b * v1,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0, b * v1, c * v1,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0, a * v2, b * v2, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0, b * v2, c * v2, 0, 0, 0},
+    {a * q_xy, b * q_xy,        0,        0,       0,       0,        0,        0, 0, 0, 0},
+    {b * q_xy, c * q_xy,        0,        0,       0,       0,        0,        0, 0, 0, 0},
+    {        0,        0, a * q_xy, b * q_xy,       0,       0,        0,        0, 0, 0, 0},
+    {        0,        0, b * q_xy, c * q_xy,       0,       0,        0,        0, 0, 0, 0},
+    {        0,        0,        0,        0, a * q_z, b * q_z,        0,        0, 0, 0, 0},
+    {        0,        0,        0,        0, b * q_z, c * q_z,        0,        0, 0, 0, 0},
+    {        0,        0,        0,        0,       0,       0, a * q_yaw, b * q_yaw, 0, 0, 0},
+    {        0,        0,        0,        0,       0,       0, b * q_yaw, c * q_yaw, 0, 0, 0},
     {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0},
     {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0},
     {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0}
@@ -131,24 +202,40 @@ void Target::predict(double dt)
     return x_prior;
   };
 
-  if (convergened() && name == ArmorName::outpost && std::abs(ekf_.x[7]) > 2.0) {
-    ekf_.x[7] = ekf_.x[7] > 0 ? 2.51 : -2.51;
+  if (name == ArmorName::outpost && std::abs(ekf_.x[7]) > 3.4) {
+    ekf_.x[7] = ekf_.x[7] > 0 ? OUTPOST_RULE_SPEED : -OUTPOST_RULE_SPEED;
   }
 
   ekf_.predict(F, Q, f);
 }
 
-void Target::update(const Armor & armor)
+void Target::update(const Armor & armor, std::optional<int> forced_id)
 {
+  if (is_outpost_model() && !outpost_layer_locked_) {
+    observe_unlocked_outpost(armor);
+    update_count_++;
+    return;
+  }
+
   int measured_outpost_layer = -1;
   int previous_outpost_layer = -1;
   if (name == ArmorName::outpost) {
     previous_outpost_layer = outpost_last_layer_;
-    measured_outpost_layer = handle_outpost_observation(armor);
   }
 
   const std::vector<Eigen::Vector4d> & xyza_list = armor_xyza_list();
-  const int id = match_armor_id(armor, xyza_list, measured_outpost_layer, previous_outpost_layer);
+  int id = -1;
+  if (forced_id.has_value() && forced_id.value() >= 0 && forced_id.value() < armor_num_) {
+    id = forced_id.value();
+  } else {
+    id = measured_outpost_layer >= 0
+           ? measured_outpost_layer
+           : match_armor_id(armor, xyza_list, -1, previous_outpost_layer);
+  }
+
+  if (name == ArmorName::outpost) {
+    outpost_last_layer_ = id;
+  }
 
   if (id != 0) jumped = true;
 
@@ -162,6 +249,18 @@ void Target::update(const Armor & armor)
 
   last_id = id;
   update_count_++;
+
+  if (name == ArmorName::outpost) {
+    const Eigen::Vector3d predicted_xyz = h_armor_xyz(ekf_.x, id);
+    const double predicted_angle =
+      tools::limit_rad(ekf_.x[6] + armor_angle_offset(id, armor_num_, name));
+    ekf_.data["outpost_layer_locked"] = 1.0;
+    ekf_.data["outpost_selected_id"] = id;
+    ekf_.data["outpost_layer_residual"] = armor.xyz_in_world[2] - predicted_xyz[2];
+    ekf_.data["outpost_phase_residual"] =
+      tools::limit_rad(armor.ypr_in_world[0] - predicted_angle);
+    ekf_.data["outpost_center_speed"] = std::hypot(ekf_.x[1], ekf_.x[3]);
+  }
 
   update_ypda(armor, id);
 }
@@ -271,13 +370,7 @@ int Target::match_outpost_armor_id(
   previous_outpost_layer = clamp_layer(previous_outpost_layer);
 
   const double spacing = OUTPOST_LAYER_SPACING;
-  const double z_gate = std::max(0.02, spacing * 0.45);
-
-  auto normalized_square = [](double value, double gate) -> double {
-    const double safe_gate = (gate <= 1e-6) ? 1e-6 : gate;
-    const double normalized = value / safe_gate;
-    return normalized * normalized;
-  };
+  const double z_gate = std::max(0.06, spacing * 0.8);
 
   int best_id = 0;
   double best_score = std::numeric_limits<double>::infinity();
@@ -293,24 +386,24 @@ int Target::match_outpost_armor_id(
     const double z_err = std::abs(armor.xyz_in_world[2] - xyza[2]);
 
     double score =
-      0.8 * normalized_square(yaw_err, 0.35) +
-      0.6 * normalized_square(bearing_err, 0.35) +
-      0.4 * normalized_square(pitch_err, 0.25) +
-      0.3 * normalized_square(dist_err, 0.45) +
-      3.0 * normalized_square(z_err, z_gate);
+      1.0 * normalized_square(yaw_err, 0.45) +
+      0.7 * normalized_square(bearing_err, 0.40) +
+      0.4 * normalized_square(pitch_err, 0.30) +
+      0.25 * normalized_square(dist_err, 0.60) +
+      0.8 * normalized_square(z_err, z_gate);
 
     if (measured_outpost_layer >= 0) {
       const int diff = std::abs(idx - measured_outpost_layer);
       if (diff == 0) {
-        score *= 0.6;
+        score *= 0.45;
       } else if (diff == 1) {
-        score += 0.5;
+        score += 1.0;
       } else {
-        score += 1.5;
+        score += 3.0;
       }
     } else if (previous_outpost_layer >= 0) {
       const int diff_prev = std::abs(idx - previous_outpost_layer);
-      if (diff_prev >= 2) score += 0.5;
+      if (diff_prev >= 2) score += 0.15;
     }
 
     if (score < best_score) {
@@ -332,8 +425,28 @@ Eigen::Vector4d Target::last_observed_armor_xyza() const { return last_observed_
 
 double Target::last_observed_age() const { return last_observed_age_s_; }
 
+bool Target::outpost_layer_locked() const { return !is_outpost_model() || outpost_layer_locked_; }
+
+void Target::set_outpost_association_debug(
+  int best_id, const std::array<double, 3> & scores, double best_score,
+  const std::string & reject_reason)
+{
+  if (!is_outpost_model()) return;
+  ekf_.data["assoc_best_id"] = static_cast<double>(best_id);
+  ekf_.data["assoc_best_score"] = best_score;
+  ekf_.data["assoc_score_0"] = scores[0];
+  ekf_.data["assoc_score_1"] = scores[1];
+  ekf_.data["assoc_score_2"] = scores[2];
+  ekf_.data["assoc_reject_reason"] = reject_reason.empty() ? 0.0 : 1.0;
+}
+
 std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 {
+  if (is_outpost_model() && !outpost_layer_locked_) {
+    if (!has_last_observed_armor_) return {};
+    return {last_observed_armor_xyza_};
+  }
+
   std::vector<Eigen::Vector4d> xyza_list;
   for (int i = 0; i < armor_num_; i++) {
     const auto angle = tools::limit_rad(ekf_.x[6] + armor_angle_offset(i, armor_num_, name));
@@ -368,7 +481,7 @@ bool Target::convergened()
     is_converged_ = true;
   }
 
-  if (name == ArmorName::outpost && update_count_ > 15 && !diverged()) {
+  if (is_outpost_model() && outpost_layer_locked_ && update_count_ > 15 && !diverged()) {
     is_converged_ = true;
   }
 
@@ -435,138 +548,188 @@ Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
 
 bool Target::checkinit() { return isinit; }
 
-int Target::handle_outpost_observation(const Armor & armor)
+bool Target::is_outpost_model() const
 {
-  if (armor_num_ != 3) return -1;
-
-  const double spacing = OUTPOST_LAYER_SPACING;
-  const double z_meas = armor.xyz_in_world[2];
-  const double base_state = ekf_.x[4];
-  const double base_weight = outpost_base_initialized_ ? 0.5 : 0.0;
-
-  double best_score = std::numeric_limits<double>::infinity();
-  int best_layer = 0;
-  double best_candidate_base = base_state;
-
-  for (int layer = 0; layer < 3; ++layer) {
-    const double layer_d = static_cast<double>(layer);
-    const double candidate_base = z_meas - spacing * layer_d;
-    const double expected_z = base_state + spacing * layer_d;
-    const double observation_error = std::abs(z_meas - expected_z);
-    const double base_penalty = std::abs(candidate_base - base_state);
-    const double score = observation_error + base_weight * base_penalty;
-
-    if (score < best_score) {
-      best_score = score;
-      best_layer = layer;
-      best_candidate_base = candidate_base;
-    }
-  }
-
-  const double expected_base = z_meas - spacing * static_cast<double>(best_layer);
-  const double max_base_error = spacing * 0.3;
-  best_candidate_base = std::clamp(
-    best_candidate_base, expected_base - max_base_error, expected_base + max_base_error);
-
-  const double tolerance = spacing * 0.2;
-  const double smooth_alpha = 0.3;
-
-  if (!outpost_base_initialized_) {
-    ekf_.x[4] = best_candidate_base;
-    ekf_.x[5] = 0.0;
-    outpost_base_initialized_ = true;
-  } else {
-    const double delta = best_candidate_base - ekf_.x[4];
-
-    if (std::abs(delta) < tolerance) {
-      ekf_.x[4] = (1.0 - smooth_alpha) * ekf_.x[4] + smooth_alpha * best_candidate_base;
-    } else if (best_score < spacing * 0.1) {
-      ekf_.x[4] = 0.5 * ekf_.x[4] + 0.5 * best_candidate_base;
-      ekf_.x[5] = 0.0;
-    } else {
-      ekf_.x[4] = 0.9 * ekf_.x[4] + 0.1 * best_candidate_base;
-    }
-  }
-
-  outpost_last_layer_ = best_layer;
-  update_outpost_cache(best_layer, z_meas);
-  maybe_rebaseline_outpost();
-  return best_layer;
+  return name == ArmorName::outpost && armor_num_ == 3;
 }
 
-void Target::update_outpost_cache(int layer, double z_meas)
+Eigen::Vector3d Target::outpost_center_from_armor(const Armor & armor) const
 {
-  outpost_recent_layers_.emplace_back(layer, z_meas);
-  if (outpost_recent_layers_.size() > OUTPOST_CACHE_LIMIT) {
-    outpost_recent_layers_.pop_front();
+  return {
+    armor.xyz_in_world[0] + ekf_.x[8] * std::cos(armor.ypr_in_world[0]),
+    armor.xyz_in_world[1] + ekf_.x[8] * std::sin(armor.ypr_in_world[0]),
+    armor.xyz_in_world[2]};
+}
+
+void Target::observe_unlocked_outpost(const Armor & armor)
+{
+  record_observed_armor(armor);
+
+  outpost_init_observations_.push_back(
+    OutpostObservation{t_, armor.xyz_in_world, outpost_center_from_armor(armor), armor.ypr_in_world[0]});
+  if (outpost_init_observations_.size() > OUTPOST_INIT_CACHE_LIMIT) {
+    outpost_init_observations_.pop_front();
+  }
+
+  if (!try_lock_outpost_layers()) {
+    last_id = -1;
+    jumped = false;
+    ekf_.data["outpost_layer_locked"] = 0.0;
+    ekf_.data["outpost_selected_id"] = -1.0;
+    ekf_.data["outpost_layer_residual"] = 0.0;
+    ekf_.data["outpost_phase_residual"] = 0.0;
+    ekf_.data["outpost_center_speed"] = 0.0;
   }
 }
 
-void Target::maybe_rebaseline_outpost()
+bool Target::try_lock_outpost_layers()
 {
-  if (outpost_recent_layers_.size() < 3) return;
+  if (outpost_init_observations_.size() < 2) {
+    ekf_.data["init_best_score"] = std::numeric_limits<double>::infinity();
+    ekf_.data["init_margin"] = 0.0;
+    ekf_.data["init_distinct_layers"] = 1.0;
+    ekf_.data["init_z_vz"] = 0.0;
+    ekf_.data["init_z_max_residual"] = 0.0;
+    return false;
+  }
 
+  struct Hypothesis
+  {
+    double score = 0.0;
+    double omega = 0.0;
+    std::vector<int> layers;
+    std::vector<double> base_zs;
+    std::vector<double> times;
+    double base_z0 = 0.0;
+    double base_vz = 0.0;
+    double max_z_residual = 0.0;
+    int distinct_layers = 0;
+  };
+
+  constexpr double step = 2.0 * CV_PI / 3.0;
   const double spacing = OUTPOST_LAYER_SPACING;
-  const double tolerance = spacing * 0.15;
+  const auto & first = outpost_init_observations_.front();
 
-  std::vector<double> candidates;
-  std::vector<double> weights;
+  std::vector<Hypothesis> hypotheses;
+  hypotheses.reserve(6);
 
-  for (std::size_t i = 0; i < outpost_recent_layers_.size(); ++i) {
-    for (std::size_t j = i + 1; j < outpost_recent_layers_.size(); ++j) {
-      const auto & obs_i = outpost_recent_layers_[i];
-      const auto & obs_j = outpost_recent_layers_[j];
+  for (int first_layer = 0; first_layer < armor_num_; ++first_layer) {
+    for (double omega : {OUTPOST_RULE_SPEED, -OUTPOST_RULE_SPEED}) {
+      const double theta0 = tools::limit_rad(first.yaw + static_cast<double>(first_layer) * step);
+      Hypothesis hypothesis;
+      hypothesis.omega = omega;
+      hypothesis.layers.reserve(outpost_init_observations_.size());
+      hypothesis.base_zs.reserve(outpost_init_observations_.size());
+      hypothesis.times.reserve(outpost_init_observations_.size());
 
-      const int layer_i = obs_i.first;
-      const int layer_j = obs_j.first;
-      const double z_i = obs_i.second;
-      const double z_j = obs_j.second;
+      Eigen::Vector3d previous_center = Eigen::Vector3d::Zero();
+      std::chrono::steady_clock::time_point previous_t{};
+      bool has_previous = false;
+      std::array<bool, 3> layer_seen{false, false, false};
 
-      if (layer_i == layer_j) continue;
+      for (const auto & obs : outpost_init_observations_) {
+        const double dt = tools::delta_time(obs.t, first.t);
+        const double theta = tools::limit_rad(theta0 + omega * dt);
 
-      const int layer_diff = layer_j - layer_i;
-      const double expected_z_diff = spacing * static_cast<double>(layer_diff);
-      const double actual_z_diff = z_j - z_i;
-      const double diff_error = std::abs(actual_z_diff - expected_z_diff);
-      if (diff_error > tolerance) continue;
+        int best_layer = 0;
+        double best_phase_error = std::numeric_limits<double>::infinity();
+        for (int layer = 0; layer < armor_num_; ++layer) {
+          const double predicted_yaw =
+            tools::limit_rad(theta - static_cast<double>(layer) * step);
+          const double phase_error = std::abs(tools::limit_rad(obs.yaw - predicted_yaw));
+          if (phase_error < best_phase_error) {
+            best_phase_error = phase_error;
+            best_layer = layer;
+          }
+        }
 
-      const double base_i = z_i - spacing * static_cast<double>(layer_i);
-      const double base_j = z_j - spacing * static_cast<double>(layer_j);
-      const double avg_base = 0.5 * (base_i + base_j);
-      candidates.push_back(avg_base);
+        const double base_z = obs.xyz[2] - spacing * static_cast<double>(best_layer);
+        hypothesis.layers.push_back(best_layer);
+        hypothesis.base_zs.push_back(base_z);
+        hypothesis.times.push_back(dt);
+        layer_seen[best_layer] = true;
 
-      const double weight = static_cast<double>(std::abs(layer_diff)) / (1.0 + diff_error);
-      weights.push_back(weight);
+        hypothesis.score += 1.0 * normalized_square(best_phase_error, 0.35);
+        if (has_previous) {
+          const double dt_step = std::max(1e-3, tools::delta_time(obs.t, previous_t));
+          const double center_step = (obs.center.head<2>() - previous_center.head<2>()).norm();
+          hypothesis.score += 0.25 * normalized_square(center_step, 0.45 * dt_step + 0.12);
+        }
+
+        previous_center = obs.center;
+        previous_t = obs.t;
+        has_previous = true;
+      }
+
+      hypothesis.distinct_layers =
+        static_cast<int>(layer_seen[0]) + static_cast<int>(layer_seen[1]) +
+        static_cast<int>(layer_seen[2]);
+      const LineFitResult z_fit = fit_line(hypothesis.times, hypothesis.base_zs);
+      hypothesis.base_z0 = z_fit.intercept;
+      hypothesis.base_vz = z_fit.slope;
+      hypothesis.max_z_residual = z_fit.max_abs_residual;
+      hypothesis.score += 1.8 * z_fit.residual_score;
+      hypothesis.score += 0.45 * normalized_square(hypothesis.base_vz, OUTPOST_INIT_Z_VELOCITY_GATE);
+      if (std::abs(hypothesis.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY) {
+        hypothesis.score +=
+          12.0 *
+          normalized_square(
+            std::abs(hypothesis.base_vz) - OUTPOST_INIT_Z_MAX_VELOCITY,
+            OUTPOST_INIT_Z_VELOCITY_GATE);
+      }
+      hypotheses.push_back(std::move(hypothesis));
     }
   }
 
-  if (candidates.empty()) return;
+  std::sort(
+    hypotheses.begin(), hypotheses.end(),
+    [](const Hypothesis & lhs, const Hypothesis & rhs) { return lhs.score < rhs.score; });
 
-  double weighted_sum = 0.0;
-  double weight_sum = 0.0;
-  for (std::size_t i = 0; i < candidates.size(); ++i) {
-    weighted_sum += candidates[i] * weights[i];
-    weight_sum += weights[i];
+  const Hypothesis & best = hypotheses.front();
+  const double second_score = hypotheses.size() > 1 ? hypotheses[1].score : best.score;
+  const double margin = second_score - best.score;
+  ekf_.data["init_best_score"] = best.score;
+  ekf_.data["init_margin"] = margin;
+  ekf_.data["init_distinct_layers"] = static_cast<double>(best.distinct_layers);
+  ekf_.data["init_z_vz"] = best.base_vz;
+  ekf_.data["init_z_max_residual"] = best.max_z_residual;
+
+  if (outpost_init_observations_.size() < 3 || best.distinct_layers < 2 || best.score > 18.0 ||
+      margin < 0.05 || best.max_z_residual > OUTPOST_INIT_Z_MAX_RESIDUAL ||
+      std::abs(best.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY) {
+    return false;
   }
-  const double new_base = weighted_sum / weight_sum;
 
-  double variance = 0.0;
-  for (const double & candidate : candidates) {
-    const double diff = candidate - new_base;
-    variance += diff * diff;
+  const auto & last_obs = outpost_init_observations_.back();
+  const int layer = best.layers.back();
+  const double base_z = best.base_z0 + best.base_vz * best.times.back();
+  const double theta = tools::limit_rad(last_obs.yaw + static_cast<double>(layer) * step);
+
+  ekf_.x[0] = last_obs.center[0];
+  ekf_.x[2] = last_obs.center[1];
+  ekf_.x[4] = base_z;
+  ekf_.x[5] = best.base_vz;
+  ekf_.x[6] = theta;
+  ekf_.x[7] = best.omega;
+
+  if (outpost_init_observations_.size() >= 2) {
+    const auto & prev_obs = outpost_init_observations_[outpost_init_observations_.size() - 2];
+    const double dt = std::max(1e-3, tools::delta_time(last_obs.t, prev_obs.t));
+    ekf_.x[1] = std::clamp((last_obs.center[0] - prev_obs.center[0]) / dt, -8.0, 8.0);
+    ekf_.x[3] = std::clamp((last_obs.center[1] - prev_obs.center[1]) / dt, -8.0, 8.0);
   }
-  const double std_dev = std::sqrt(variance / static_cast<double>(candidates.size()));
 
-  if (std_dev < spacing * 0.1) {
-    const double delta = new_base - ekf_.x[4];
-    const double update_threshold = spacing * 0.05;
+  outpost_layer_locked_ = true;
+  outpost_last_layer_ = layer;
+  last_id = layer;
+  jumped = layer != 0;
 
-    if (std::abs(delta) > update_threshold) {
-      const double alpha = std::min(0.5, std_dev < spacing * 0.05 ? 0.7 : 0.3);
-      ekf_.x[4] = (1.0 - alpha) * ekf_.x[4] + alpha * new_base;
-      outpost_base_initialized_ = true;
-    }
-  }
+  ekf_.data["outpost_layer_locked"] = 1.0;
+  ekf_.data["outpost_selected_id"] = static_cast<double>(layer);
+  ekf_.data["outpost_layer_residual"] = 0.0;
+  ekf_.data["outpost_phase_residual"] = 0.0;
+  ekf_.data["outpost_center_speed"] = std::hypot(ekf_.x[1], ekf_.x[3]);
+  return true;
 }
 
 }  // namespace auto_aim

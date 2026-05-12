@@ -3,6 +3,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <limits>
@@ -140,11 +141,7 @@ std::list<Target> Tracker::track(
   auto dt = tools::delta_time(t, last_timestamp_);
   last_timestamp_ = t;
 
-  // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > 0.1) {
-    tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
-    state_ = "lost";
-  }
+  handle_large_dt(dt);
   // 过滤掉非我方装甲板
   armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
 
@@ -214,11 +211,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   auto dt = tools::delta_time(t, last_timestamp_);
   last_timestamp_ = t;
 
-  // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > 0.1) {
-    tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
-    state_ = "lost";
-  }
+  handle_large_dt(dt);
 
   sort_armors(armors);
 
@@ -368,6 +361,18 @@ void Tracker::state_machine(bool found)
   }
 }
 
+void Tracker::handle_large_dt(double dt)
+{
+  // 时间间隔过长，说明可能发生了相机离线。前哨站模型已经带有更长的 temp_lost
+  // 保持窗口，单次时间戳跳变不应清空层级语义；后续由关联和状态机决定是否丢失。
+  if (state_ == "lost" || dt <= 0.1) return;
+
+  tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
+  if (target_.name == ArmorName::outpost) return;
+
+  state_ = "lost";
+}
+
 bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
   if (armors.empty()) return false;
@@ -414,42 +419,67 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
 
   const std::vector<Eigen::Vector4d> predicted_armors = target_.armor_xyza_list();
   const int predicted_count = static_cast<int>(predicted_armors.size());
-  const int ref_id =
-    predicted_count == 0 ? 0 : std::clamp(target_.last_id, 0, predicted_count - 1);
-  const Eigen::Vector3d ref_ypd = predicted_count == 0
-                                    ? Eigen::Vector3d::Zero()
-                                    : tools::xyz2ypd(predicted_armors[ref_id].head(3));
-  const double center_yaw = std::atan2(target_.ekf_x()[2], target_.ekf_x()[0]);
+  auto normalized_square = [](double value, double gate) {
+    const double safe_gate = gate <= 1e-6 ? 1e-6 : gate;
+    const double normalized = value / safe_gate;
+    return normalized * normalized;
+  };
 
   Armor * best_armor = nullptr;
   double best_score = std::numeric_limits<double>::infinity();
+  int best_id = -1;
+  std::array<double, 3> best_scores{
+    std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(),
+    std::numeric_limits<double>::infinity()};
 
   for (auto * armor_ptr : candidates) {
     auto & armor = *armor_ptr;
     solver_.solve(armor);
 
-    double score = 0.0;
-    if (predicted_count > 0) {
-      const Eigen::Vector4d & ref_xyza = predicted_armors[ref_id];
-      score += std::abs(tools::limit_rad(armor.ypr_in_world[0] - ref_xyza[3]));
-      score += std::abs(tools::limit_rad(armor.ypd_in_world[0] - ref_ypd[0]));
-      score += 0.20 * std::abs(armor.ypd_in_world[2] - ref_ypd[2]);
-    }
+    for (int id = 0; id < std::max(1, predicted_count); ++id) {
+      double score = 0.0;
+      if (predicted_count > 0) {
+        const Eigen::Vector4d & xyza = predicted_armors[id];
+        const Eigen::Vector3d predicted_ypd = tools::xyz2ypd(xyza.head(3));
+        const double yaw_err = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3]));
+        const double bearing_err =
+          std::abs(tools::limit_rad(armor.ypd_in_world[0] - predicted_ypd[0]));
+        const double pitch_err =
+          std::abs(tools::limit_rad(armor.ypd_in_world[1] - predicted_ypd[1]));
+        const double dist_err = std::abs(armor.ypd_in_world[2] - predicted_ypd[2]);
+        const double z_err = std::abs(armor.xyz_in_world[2] - xyza[2]);
 
-    if (target_.name != ArmorName::outpost) {
-      const double observed_delta = std::abs(tools::limit_rad(armor.ypr_in_world[0] - center_yaw));
-      if (observed_delta > 100.0 / 57.3) score += 0.8;
-    }
+        score =
+          1.0 * normalized_square(yaw_err, 0.45) +
+          0.7 * normalized_square(bearing_err, 0.40) +
+          0.4 * normalized_square(pitch_err, 0.30) +
+          0.25 * normalized_square(dist_err, 0.60) +
+          0.8 * normalized_square(z_err, 0.08);
 
-    if (score < best_score) {
-      best_score = score;
-      best_armor = &armor;
+        if (id == target_.last_id) score *= 0.95;
+      }
+
+      if (score < best_score) {
+        best_score = score;
+        best_armor = &armor;
+        best_id = id;
+      }
+      if (id >= 0 && id < static_cast<int>(best_scores.size())) {
+        best_scores[id] = std::min(best_scores[id], score);
+      }
     }
   }
 
   if (best_armor == nullptr) return false;
 
-  target_.update(*best_armor);
+  const double reject_score = target_.outpost_layer_locked() ? 28.0 : 80.0;
+  if (best_score > reject_score) {
+    target_.set_outpost_association_debug(best_id, best_scores, best_score, "score_gate");
+    return false;
+  }
+
+  target_.set_outpost_association_debug(best_id, best_scores, best_score, "");
+  target_.update(*best_armor, best_id);
   return true;
 }
 

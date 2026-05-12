@@ -67,6 +67,8 @@ private:
 
   void state_machine(bool found);
 
+  void handle_large_dt(double dt);
+
   bool set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);
 
   bool update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);

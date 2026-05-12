@@ -1,4 +1,5 @@
 #include <chrono>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <list>
@@ -7,6 +8,12 @@
 
 #include <opencv2/calib3d.hpp>
 #include <yaml-cpp/yaml.h>
+
+#define private public
+#include "tasks/auto_aim/target.hpp"
+#include "tasks/auto_aim/tracker.hpp"
+#include "tasks/auto_aim/aimer.hpp"
+#undef private
 
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/solver.hpp"
@@ -83,6 +90,19 @@ auto_aim::Armor make_world_armor(
   return armor;
 }
 
+auto_aim::Armor make_outpost_layer_armor(
+  const Eigen::Vector3d & center_base, double theta, int layer)
+{
+  const double radius = 0.2765;
+  const double angle = tools::limit_rad(theta - static_cast<double>(layer) * 2 * CV_PI / 3);
+  const Eigen::Vector3d xyz{
+    center_base[0] - radius * std::cos(angle),
+    center_base[1] - radius * std::sin(angle),
+    center_base[2] + 0.1 * static_cast<double>(layer)};
+  return make_world_armor(
+    auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost, xyz, angle);
+}
+
 std::vector<cv::Point2f> project_fixed_armor(
   const std::string & config_path, const Eigen::Vector3d & xyz_in_world, double yaw,
   auto_aim::ArmorName name)
@@ -133,6 +153,16 @@ std::vector<cv::Point2f> project_fixed_armor(
   return image_points;
 }
 
+auto_aim::Armor make_detection_outpost_armor(
+  const std::string & config_path, const Eigen::Vector3d & xyz, double yaw)
+{
+  auto armor =
+    make_world_armor(auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost, xyz, yaw);
+  armor.points = project_fixed_armor(config_path, xyz, yaw, auto_aim::ArmorName::outpost);
+  armor.center = (armor.points[0] + armor.points[1] + armor.points[2] + armor.points[3]) * 0.25f;
+  return armor;
+}
+
 }  // namespace
 
 int main()
@@ -166,7 +196,7 @@ int main()
     auto image_points =
       project_fixed_armor(config_path, expected_xyz, expected_yaw, auto_aim::ArmorName::outpost);
     auto armor =
-      make_world_armor(auto_aim::ArmorName::outpost, auto_aim::ArmorType::small, expected_xyz, expected_yaw);
+      make_world_armor(auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost, expected_xyz, expected_yaw);
     armor.points = image_points;
     armor.center =
       (image_points[0] + image_points[1] + image_points[2] + image_points[3]) * 0.25f;
@@ -185,9 +215,248 @@ int main()
 
   {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
-    auto initial_armor =
-      make_world_armor(auto_aim::ArmorName::outpost, auto_aim::ArmorType::small, {2.0, 0.0, 1.0}, 0.0);
-    auto_aim::Target target(initial_armor, now, 0.2765, 3, P0_dig);
+    const Eigen::Vector3d center_base(2.20, 0.10, 0.70);
+    const double theta = 0.40;
+
+    for (int layer = 0; layer < 3; ++layer) {
+      auto first_observed = make_outpost_layer_armor(center_base, theta, layer);
+      auto_aim::Target target(first_observed, now, 0.2765, 3, P0_dig);
+      if (!expect(
+            !target.outpost_layer_locked(),
+            "outpost target should not lock from a single observation at layer " +
+              std::to_string(layer))) {
+        return 1;
+      }
+      if (!expect(
+            target.armor_xyza_list().size() == 1,
+            "single-observation outpost should expose only observed armor at layer " +
+              std::to_string(layer))) {
+        return 1;
+      }
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig = Eigen::VectorXd::Zero(11);
+    auto visible_armor = make_outpost_layer_armor({2.20, 0.10, 0.70}, 0.40, 0);
+    auto_aim::Target target(visible_armor, now, 0.2765, 3, P0_dig);
+    target.predict(0.05);
+    if (!expect(
+          target.ekf_.P(0, 0) > target.ekf_.P(4, 4) * 2.0,
+          "outpost moving-platform xy process noise should be tuned separately from z")) {
+      return 1;
+    }
+    if (!expect_near(
+          target.ekf_.P(0, 0), target.ekf_.P(2, 2), 1e-12,
+          "outpost x/y process noise should stay symmetric")) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base0(2.20, 0.10, 0.70);
+    const Eigen::Vector3d center_base1(2.16, 0.13, 0.74);
+    const Eigen::Vector3d center_base2(2.12, 0.16, 0.78);
+    const double theta0 = 0.40;
+    const double theta1 = theta0 + 0.05;
+    const double theta2 = theta1 + 0.05;
+    auto first_observed_layer_2 = make_outpost_layer_armor(center_base0, theta0, 2);
+    auto second_observed_layer_1 = make_outpost_layer_armor(center_base1, theta1, 1);
+    auto third_observed_layer_0 = make_outpost_layer_armor(center_base2, theta2, 0);
+    auto_aim::Target target(first_observed_layer_2, now, 0.2765, 3, P0_dig);
+
+    if (!expect(
+          !target.outpost_layer_locked(),
+          "outpost target should not lock layer semantics from the first observation")) {
+      return 1;
+    }
+    if (!expect(
+          target.armor_xyza_list().size() == 1,
+          "unlocked outpost target should expose only the observed armor")) {
+      return 1;
+    }
+
+    target.predict(now + std::chrono::milliseconds(20));
+    target.update(second_observed_layer_1);
+    if (!expect(
+          !target.outpost_layer_locked(),
+          "outpost target should keep layer semantics unlocked while hypotheses are ambiguous")) {
+      return 1;
+    }
+
+    target.predict(now + std::chrono::milliseconds(40));
+    target.update(third_observed_layer_0);
+
+    if (!expect(target.outpost_layer_locked(), "outpost target should lock after distinct layers")) {
+      return 1;
+    }
+    if (!expect(
+          target.last_id == 0,
+          "outpost moving-platform init should recover layer order after seeing multiple layers, actual=" +
+            std::to_string(target.last_id))) {
+      return 1;
+    }
+    if (!expect_near(
+          target.ekf_x()[4], third_observed_layer_0.xyz_in_world[2], 0.08,
+          "outpost base z should be updated from the matched layer")) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    constexpr double dt = 0.05;
+    constexpr double base_vz = 0.4;
+    const Eigen::Vector3d center_base0(2.20, 0.10, 0.70);
+    const double theta0 = 0.40;
+
+    auto moving_observation = [&](const std::array<int, 4> & layers, int index, double z_noise) {
+      const double time = dt * static_cast<double>(index);
+      Eigen::Vector3d center_base{
+        center_base0[0] - 0.015 * static_cast<double>(index),
+        center_base0[1] + 0.010 * static_cast<double>(index),
+        center_base0[2] + base_vz * time + z_noise};
+      return make_outpost_layer_armor(
+        center_base, theta0 + 0.8 * CV_PI * time, layers[index]);
+    };
+
+    const std::array<int, 4> ambiguous_layers{2, 2, 2, 1};
+    auto_aim::Target ambiguous_target(
+      moving_observation(ambiguous_layers, 0, 0.0), now, 0.2765, 3, P0_dig);
+    for (int i = 1; i < static_cast<int>(ambiguous_layers.size()); ++i) {
+      ambiguous_target.predict(now + std::chrono::microseconds(static_cast<int64_t>(dt * i * 1e6)));
+      ambiguous_target.update(moving_observation(ambiguous_layers, i, 0.0));
+    }
+    if (!expect(
+          !ambiguous_target.outpost_layer_locked(),
+          "outpost init should stay unlocked when only two adjacent layers are observed")) {
+      return 1;
+    }
+
+    const std::array<int, 5> layers{2, 2, 2, 1, 0};
+    auto moving_observation_5 = [&](int index, double z_noise) {
+      const double time = dt * static_cast<double>(index);
+      Eigen::Vector3d center_base{
+        center_base0[0] - 0.015 * static_cast<double>(index),
+        center_base0[1] + 0.010 * static_cast<double>(index),
+        center_base0[2] + base_vz * time + z_noise};
+      return make_outpost_layer_armor(
+        center_base, theta0 + 0.8 * CV_PI * time, layers[index]);
+    };
+
+    auto_aim::Target target(moving_observation_5(0, 0.0), now, 0.2765, 3, P0_dig);
+    for (int i = 1; i < static_cast<int>(layers.size()); ++i) {
+      target.predict(now + std::chrono::microseconds(static_cast<int64_t>(dt * i * 1e6)));
+      target.update(moving_observation_5(i, i == 4 ? 0.03 : 0.0));
+    }
+
+    if (!expect(
+          target.outpost_layer_locked(),
+          "outpost target should lock while platform z moves smoothly, score=" +
+            std::to_string(target.ekf_.data["init_best_score"]) + ", margin=" +
+            std::to_string(target.ekf_.data["init_margin"]) + ", distinct=" +
+            std::to_string(target.ekf_.data["init_distinct_layers"]))) {
+      return 1;
+    }
+    if (!expect_near(
+          target.ekf_x()[5], base_vz, 0.25,
+          "outpost init should estimate z velocity from a smooth multi-frame trend")) {
+      return 1;
+    }
+  }
+
+  {
+    auto_aim::Solver solver(config_path);
+    solver.set_R_gimbal2world(Eigen::Quaterniond::Identity());
+    auto_aim::Tracker tracker(config_path, solver);
+
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base(2.20, 0.10, 0.70);
+    const double theta = 0.40;
+    auto first = make_outpost_layer_armor(center_base, theta, 2);
+    auto second = make_outpost_layer_armor(center_base, theta + 0.05, 1);
+    auto third = make_outpost_layer_armor(center_base, theta + 0.10, 0);
+    tracker.target_ = auto_aim::Target(first, now, 0.2765, 3, P0_dig);
+    tracker.target_.predict(now + std::chrono::milliseconds(20));
+    tracker.target_.update(second);
+    tracker.target_.predict(now + std::chrono::milliseconds(40));
+    tracker.target_.update(third);
+    if (!expect(tracker.target_.outpost_layer_locked(), "tracker fixture should be layer locked")) {
+      return 1;
+    }
+    tracker.target_.last_id = 2;
+
+    const auto predicted = tracker.target_.armor_xyza_list();
+    std::list<auto_aim::Armor> armors;
+    armors.push_back(make_detection_outpost_armor(config_path, predicted[0].head(3), predicted[0][3]));
+    armors.push_back(make_detection_outpost_armor(config_path, predicted[2].head(3), predicted[2][3]));
+
+    const bool found = tracker.update_target(armors, now + std::chrono::milliseconds(10));
+    if (!expect(found, "outpost tracker should find a candidate from multiple detections")) return 1;
+    if (!expect(
+          tracker.target_.last_id == 0,
+          "outpost tracker candidate selection should not be biased to previous last_id, actual=" +
+            std::to_string(tracker.target_.last_id))) {
+      return 1;
+    }
+  }
+
+  {
+    auto_aim::Solver solver(config_path);
+    solver.set_R_gimbal2world(Eigen::Quaterniond::Identity());
+    auto_aim::Tracker tracker(config_path, solver);
+
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base(2.20, 0.10, 0.70);
+    auto first = make_outpost_layer_armor(center_base, 0.40, 2);
+    auto second = make_outpost_layer_armor(center_base, 0.45, 1);
+    auto third = make_outpost_layer_armor(center_base, 0.50, 0);
+    tracker.target_ = auto_aim::Target(first, now, 0.2765, 3, P0_dig);
+    tracker.target_.predict(now + std::chrono::milliseconds(20));
+    tracker.target_.update(second);
+    tracker.target_.predict(now + std::chrono::milliseconds(40));
+    tracker.target_.update(third);
+    if (!expect(
+          tracker.target_.outpost_layer_locked(),
+          "tracker fixture should be layer locked before large-dt test")) {
+      return 1;
+    }
+
+    tracker.state_ = "tracking";
+    tracker.last_timestamp_ = now + std::chrono::milliseconds(40);
+    std::list<auto_aim::Armor> no_armors;
+    const auto targets = tracker.track(no_armors, now + std::chrono::milliseconds(153));
+
+    if (!expect(
+          tracker.state() == "temp_lost",
+          "locked outpost should enter temp_lost instead of lost on a single large dt")) {
+      return 1;
+    }
+    if (!expect(!targets.empty(), "large-dt outpost temp_lost should keep the target model")) {
+      return 1;
+    }
+    if (!expect(
+          targets.front().outpost_layer_locked(),
+          "large-dt outpost temp_lost should preserve layer semantics")) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base(2.0, 0.0, 1.0);
+    auto first = make_outpost_layer_armor(center_base, 0.0, 2);
+    auto second = make_outpost_layer_armor(center_base, 0.05, 1);
+    auto third = make_outpost_layer_armor(center_base, 0.10, 0);
+    auto_aim::Target target(first, now, 0.2765, 3, P0_dig);
+    target.predict(now + std::chrono::milliseconds(20));
+    target.update(second);
+    target.predict(now + std::chrono::milliseconds(40));
+    target.update(third);
+    if (!expect(target.outpost_layer_locked(), "target should be locked before checking full geometry")) {
+      return 1;
+    }
 
     const auto initial_xyza = target.armor_xyza_list();
     if (!expect_near(
@@ -212,9 +481,9 @@ int main()
     }
 
     auto observed_layer_2 = make_world_armor(
-      auto_aim::ArmorName::outpost, auto_aim::ArmorType::small, initial_xyza[2].head(3),
+      auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost, initial_xyza[2].head(3),
       initial_xyza[2][3]);
-    target.update(observed_layer_2);
+    target.update(observed_layer_2, 2);
 
     if (!expect(target.last_id == 2, "target should match the observed outpost layer")) return 1;
     if (!expect(target.has_last_observed_armor(), "target should cache last observed armor")) return 1;
@@ -227,10 +496,45 @@ int main()
 
   {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base(2.20, 0.10, 0.70);
+    auto first = make_outpost_layer_armor(center_base, 0.40, 2);
+    auto second = make_outpost_layer_armor(center_base, 0.45, 1);
+    auto third = make_outpost_layer_armor(center_base, 0.50, 0);
+    auto_aim::Target target(first, now, 0.2765, 3, P0_dig);
+    target.predict(now + std::chrono::milliseconds(20));
+    target.update(second);
+    target.predict(now + std::chrono::milliseconds(40));
+    target.update(third);
+    if (!expect(target.outpost_layer_locked(), "target should be locked before z outlier test")) {
+      return 1;
+    }
+
+    const double base_before = target.ekf_x()[4];
+    target.ekf_.P = Eigen::MatrixXd::Identity(11, 11) * 1e-6;
+    const auto predicted = target.armor_xyza_list();
+    auto noisy_layer_0 = make_world_armor(
+      auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost,
+      predicted[0].head(3) + Eigen::Vector3d(0.0, 0.0, 0.20), predicted[0][3]);
+
+    target.update(noisy_layer_0, 0);
+
+    if (!expect(
+          std::abs(target.ekf_x()[4] - base_before) < 0.05,
+          "locked outpost base z should be estimated by EKF, not manually overwritten")) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
     auto visible_armor =
-      make_world_armor(auto_aim::ArmorName::outpost, auto_aim::ArmorType::small, {2.0, 0.0, 1.0}, 0.0);
+      make_world_armor(auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost, {2.0, 0.0, 1.0}, 0.0);
     auto_aim::Target target(visible_armor, now, 0.2765, 3, P0_dig);
-    target.update(visible_armor);
+    if (!expect(
+          !target.outpost_layer_locked(),
+          "single visible outpost armor should remain unlocked before aiming")) {
+      return 1;
+    }
 
     auto_aim::Aimer aimer(config_path);
     std::list<auto_aim::Target> targets{target};
@@ -240,7 +544,7 @@ int main()
       return 1;
     }
     if (!expect(aimer.debug_aim_point.valid, "aimer debug aim point should be valid")) return 1;
-    if (!expect(aimer.debug_aim_point.armor_id == 0, "aimer should keep aiming at the visible front armor")) {
+    if (!expect(aimer.debug_aim_point.armor_id == 0, "aimer should directly aim at the visible armor")) {
       return 1;
     }
   }
