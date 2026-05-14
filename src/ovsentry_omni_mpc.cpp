@@ -84,7 +84,6 @@ std::string slot_name(omniperception::OmniCameraSlot slot)
 
 bool better_armor(const auto_aim::Armor & lhs, const auto_aim::Armor & rhs)
 {
-  if (lhs.priority != rhs.priority) return lhs.priority < rhs.priority;
   return lhs.confidence > rhs.confidence;
 }
 
@@ -111,6 +110,12 @@ ArmorTargetMask read_nav_armor_target_mask()
   // 例如导航要求只打基地时：
   // mask.enabled = true;
   // mask.allowed_names = {auto_aim::ArmorName::base};
+  mask.enabled = true;
+  mask.allowed_names = {
+    auto_aim::ArmorName::two,     auto_aim::ArmorName::three,
+    auto_aim::ArmorName::four,    auto_aim::ArmorName::five,
+    auto_aim::ArmorName::sentry,  auto_aim::ArmorName::outpost,
+    auto_aim::ArmorName::base};
   return mask;
 }
 
@@ -206,7 +211,6 @@ std::optional<omniperception::OmniCandidate> build_omni_candidate(
   omniperception::OmniCandidate candidate;
   candidate.slot = result.cam.spec.slot;
   candidate.armor_name = armor.name;
-  candidate.priority = armor.priority;
   candidate.confidence = armor.confidence;
   candidate.timestamp = timestamp;
   candidate.base_big_yaw_rad = base_big_yaw_rad;
@@ -255,9 +259,7 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
   tools::draw_points(img, armor.points, result.cam.color, 2);
   tools::draw_text(
     img,
-    fmt::format(
-      "{} pri={} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name], static_cast<int>(armor.priority),
-      armor.confidence),
+    fmt::format("{} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name], armor.confidence),
     {10, 60}, result.cam.color, 0.7, 2);
   tools::draw_text(
     img, fmt::format("delta yaw={:.1f} pitch={:.1f}", result.delta_yaw_deg, result.delta_pitch_deg),
@@ -414,7 +416,6 @@ int main(int argc, char * argv[])
     const auto armor_target_mask = read_nav_armor_target_mask();
     decider.armor_filter(armors);
     apply_armor_target_mask(armors, armor_target_mask);
-    decider.set_priority(armors);
     auto targets = tracker.track(armors, main_timestamp);
     const std::string tracker_state = tracker.state();
     const bool omni_mode = tracker_state == "lost";
@@ -466,7 +467,6 @@ int main(int argc, char * argv[])
           frame.result.infer_ms = infer_ms;
           decider.armor_filter(frame.result.armors);
           apply_armor_target_mask(frame.result.armors, armor_target_mask);
-          decider.set_priority(frame.result.armors);
           frame.result.top_armor = pick_top_armor(frame.result.armors);
           if (frame.result.top_armor.has_value()) {
             auto [dyaw, dpitch] = calc_delta_angle_deg(frame.result.top_armor.value(), cam_cfg);
