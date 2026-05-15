@@ -315,6 +315,7 @@ std::optional<omniperception::OmniCandidate> build_omni_candidate(
   candidate.base_big_yaw_rad = base_big_yaw_rad;
   candidate.abs_yaw_rad = base_big_yaw_rad + result.delta_yaw_deg / 57.3;
   apply_abs_yaw_target(candidate.command, candidate.abs_yaw_rad);
+  candidate.command.armor_id = armor_name_to_nav_id(armor.name);
   candidate.command.pitch = 0.26;
   return candidate;
 }
@@ -625,7 +626,12 @@ int main(int argc, char * argv[])
         omni_target_error_deg = angular_distance_deg(omni_command.big_yaw, gimbal_state.big_yaw);
       }
 
-      gimbal->send(omni_command);
+      const double omni_big_yaw = omni_command.has_target_yaw ? omni_command.big_yaw : omni_command.yaw;
+      const double omni_small_yaw =
+        omni_command.has_target_yaw ? omni_command.small_yaw : omni_command.yaw;
+      gimbal->send_mpc(
+        omni_command.control, omni_command.shoot, omni_big_yaw, omni_small_yaw, omni_command.pitch,
+        0.0, 0.0, 0.0, 0.0, static_cast<uint8_t>(omni_command.armor_id), 0.0, 0.0, 0.0);
     } else {
       left_img.release();
       right_img.release();
