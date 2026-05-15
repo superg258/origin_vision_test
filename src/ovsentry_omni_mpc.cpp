@@ -89,6 +89,7 @@ std::string slot_name(omniperception::OmniCameraSlot slot)
 
 bool better_armor(const auto_aim::Armor & lhs, const auto_aim::Armor & rhs)
 {
+  if (lhs.priority != rhs.priority) return lhs.priority < rhs.priority;
   return lhs.confidence > rhs.confidence;
 }
 
@@ -310,6 +311,7 @@ std::optional<omniperception::OmniCandidate> build_omni_candidate(
   omniperception::OmniCandidate candidate;
   candidate.slot = result.cam.spec.slot;
   candidate.armor_name = armor.name;
+  candidate.priority = armor.priority;
   candidate.confidence = armor.confidence;
   candidate.timestamp = timestamp;
   candidate.base_big_yaw_rad = base_big_yaw_rad;
@@ -318,6 +320,39 @@ std::optional<omniperception::OmniCandidate> build_omni_candidate(
   candidate.command.armor_id = armor_name_to_nav_id(armor.name);
   candidate.command.pitch = 0.26;
   return candidate;
+}
+
+omniperception::AcceptedOmniTarget make_accepted_omni_target(
+  const omniperception::OmniCandidate & candidate)
+{
+  omniperception::AcceptedOmniTarget accepted_target;
+  accepted_target.slot = candidate.slot;
+  accepted_target.armor_name = candidate.armor_name;
+  accepted_target.priority = candidate.priority;
+  accepted_target.confidence = candidate.confidence;
+  accepted_target.timestamp = candidate.timestamp;
+  accepted_target.base_big_yaw_rad = candidate.base_big_yaw_rad;
+  accepted_target.abs_yaw_rad = candidate.abs_yaw_rad;
+  accepted_target.command = candidate.command;
+  return accepted_target;
+}
+
+bool same_candidate_frame(
+  const OmniCandidateFrame & frame, const omniperception::OmniCandidate & candidate)
+{
+  if (!frame.candidate.has_value()) return false;
+  return frame.candidate->slot == candidate.slot &&
+         frame.candidate->armor_name == candidate.armor_name &&
+         frame.candidate->timestamp == candidate.timestamp;
+}
+
+bool same_omni_target_continuation(
+  const omniperception::AcceptedOmniTarget & lhs, const omniperception::AcceptedOmniTarget & rhs,
+  double retarget_min_delta_deg)
+{
+  if (lhs.slot != rhs.slot) return false;
+  if (lhs.armor_name != rhs.armor_name) return false;
+  return angular_distance_deg(lhs.abs_yaw_rad, rhs.abs_yaw_rad) < retarget_min_delta_deg;
 }
 
 double horizon_distance(const auto_aim::Target & target)
@@ -359,7 +394,9 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
   tools::draw_points(img, armor.points, result.cam.color, 2);
   tools::draw_text(
     img,
-    fmt::format("{} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name], armor.confidence),
+    fmt::format(
+      "{} pri={} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name],
+      static_cast<int>(armor.priority), armor.confidence),
     {10, 60}, result.cam.color, 0.7, 2);
   tools::draw_text(
     img, fmt::format("delta yaw={:.1f} pitch={:.1f}", result.delta_yaw_deg, result.delta_pitch_deg),
@@ -437,12 +474,20 @@ int main(int argc, char * argv[])
 
   const std::string auto_aim_device = read_infer_device("auto_aim_device");
   const std::string omni_device = read_infer_device("omni_device");
+  const double omni_retarget_cooldown_s =
+    yaml["omni_retarget_cooldown_s"] ? yaml["omni_retarget_cooldown_s"].as<double>() : 2.5;
   const double omni_hold_release_tolerance_deg =
     yaml["omni_hold_release_tolerance_deg"] ? yaml["omni_hold_release_tolerance_deg"].as<double>() : 3.0;
   const double omni_retarget_min_delta_deg =
     yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
+  const double omni_command_timeout_s =
+    yaml["omni_command_timeout_s"] ? yaml["omni_command_timeout_s"].as<double>() : 0.5;
   const auto omni_read_timeout = std::chrono::milliseconds(
     std::max(1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
+  const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(omni_retarget_cooldown_s));
+  const auto omni_command_timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(omni_command_timeout_s));
   const std::string auto_aim_ignore_topic = yaml["auto_aim_ignore_topic"]
                                               ? yaml["auto_aim_ignore_topic"].as<std::string>()
                                               : "/request_auto_aim_ignore";
@@ -500,6 +545,13 @@ int main(int argc, char * argv[])
   cv::Mat main_img, left_img, right_img, back_img;
   std::chrono::steady_clock::time_point main_timestamp, ts_left, ts_right, ts_back;
   std::optional<io::Command> omni_hold_command;
+  std::optional<omniperception::AcceptedOmniTarget> session_accepted_omni_target;
+  std::optional<omniperception::AcceptedOmniTarget> cooldown_anchor_omni_target;
+  std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
+  std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
+  std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
+  bool active_omni_timeout_running = false;
+  bool prev_omni_mode = false;
   int frame_count = 0;
 
   while (!exiter.exit()) {
@@ -522,6 +574,7 @@ int main(int argc, char * argv[])
     auto t1 = std::chrono::steady_clock::now();
     const auto armor_target_mask = read_nav_armor_target_mask(armor_ignore_subscriber);
     decider.armor_filter(armors);
+    decider.set_priority(armors);
     apply_armor_target_mask(armors, armor_target_mask);
     auto targets = tracker.track(armors, main_timestamp);
     const std::string tracker_state = tracker.state();
@@ -529,10 +582,51 @@ int main(int argc, char * argv[])
 
     std::optional<OmniInferenceResult> best_omni_result;
     std::optional<double> omni_target_abs_yaw_deg;
+    std::optional<double> omni_candidate_abs_yaw_deg;
+    std::optional<double> omni_candidate_base_big_yaw_deg;
+    std::optional<double> omni_candidate_age_ms;
+    std::optional<double> omni_candidate_delta_deg;
     std::optional<double> omni_target_error_deg;
+    std::optional<double> omni_selected_confidence;
+    std::optional<int> omni_selected_priority;
+    std::optional<std::string> omni_selected_slot;
     bool omni_hold_applied = false;
-    io::Command omni_command{false, false, 0.0, 0.0};
+    bool omni_retarget_blocked = false;
+    bool omni_retarget_cd_active = false;
+    bool omni_same_target_continuation = false;
+    bool omni_target_reached = false;
+    bool omni_cmd_timeout_active = false;
+    bool omni_cmd_timed_out = false;
+    std::string omni_block_reason = "none";
+    double omni_cmd_elapsed_ms = 0.0;
+    double omni_retarget_remaining_ms = 0.0;
+    const auto now = std::chrono::steady_clock::now();
     io::Command command{false, false, 0.0, 0.0};
+
+    auto clear_omni_timeout_session = [&]() {
+        active_omni_timeout_target.reset();
+        active_omni_timeout_started_at = std::chrono::steady_clock::time_point{};
+        active_omni_timeout_running = false;
+      };
+
+    auto clear_omni_redirect_state = [&]() {
+        omni_hold_command.reset();
+        session_accepted_omni_target.reset();
+        cooldown_anchor_omni_target.reset();
+        omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+        clear_omni_timeout_session();
+      };
+
+    if (cooldown_anchor_omni_target.has_value() && now >= omni_retarget_cooldown_deadline) {
+      cooldown_anchor_omni_target.reset();
+      omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+    }
+
+    if (omni_mode && !prev_omni_mode) {
+      clear_omni_redirect_state();
+    } else if (!omni_mode && prev_omni_mode) {
+      clear_omni_redirect_state();
+    }
 
     if (omni_mode) {
       auto read_omni_frame = [&](io::USBCamera & camera, cv::Mat & img,
@@ -573,6 +667,7 @@ int main(int argc, char * argv[])
                                 double infer_ms) {
           frame.result.infer_ms = infer_ms;
           decider.armor_filter(frame.result.armors);
+          decider.set_priority(frame.result.armors);
           apply_armor_target_mask(frame.result.armors, armor_target_mask);
           frame.result.top_armor = pick_top_armor(frame.result.armors);
           if (frame.result.top_armor.has_value()) {
@@ -587,6 +682,15 @@ int main(int argc, char * argv[])
       finalize_frame(right_frame, right_cam_cfg, tools::delta_time(t_omni2, t_omni1) * 1e3);
       finalize_frame(back_frame, back_cam_cfg, tools::delta_time(t_omni3, t_omni2) * 1e3);
 
+      omni_retarget_cd_active =
+        cooldown_anchor_omni_target.has_value() && now < omni_retarget_cooldown_deadline;
+      if (omni_retarget_cd_active) {
+        omni_retarget_remaining_ms =
+          std::chrono::duration<double, std::milli>(omni_retarget_cooldown_deadline - now).count();
+      }
+      const auto reference_omni_target = omniperception::select_omni_retarget_reference_target(
+        session_accepted_omni_target, cooldown_anchor_omni_target, omni_retarget_cd_active);
+
       std::vector<OmniCandidateFrame> candidate_frames;
       if (left_frame.candidate.has_value()) candidate_frames.push_back(left_frame);
       if (right_frame.candidate.has_value()) candidate_frames.push_back(right_frame);
@@ -596,47 +700,118 @@ int main(int argc, char * argv[])
       candidates.reserve(candidate_frames.size());
       for (const auto & frame : candidate_frames) candidates.push_back(frame.candidate.value());
 
-      std::optional<omniperception::AcceptedOmniTarget> no_reference_target;
       const auto selected_candidate = omniperception::select_omni_candidate(
-        candidates, no_reference_target, gimbal_state.big_yaw, omni_retarget_min_delta_deg);
+        candidates, reference_omni_target, gimbal_state.big_yaw, omni_retarget_min_delta_deg);
 
       if (selected_candidate.has_value()) {
-        omni_command = selected_candidate->command;
-        omni_hold_command = omni_command;
-        omni_target_abs_yaw_deg = omni_command.big_yaw * 57.3;
+        omni_candidate_abs_yaw_deg = selected_candidate->abs_yaw_rad * 57.3;
+        omni_candidate_base_big_yaw_deg = selected_candidate->base_big_yaw_rad * 57.3;
+        omni_candidate_age_ms = tools::delta_time(now, selected_candidate->timestamp) * 1e3;
+        omni_selected_confidence = selected_candidate->confidence;
+        omni_selected_priority = static_cast<int>(selected_candidate->priority);
+        omni_selected_slot = slot_name(selected_candidate->slot);
+
         const auto selected_frame = std::find_if(
           candidate_frames.begin(), candidate_frames.end(), [&](const OmniCandidateFrame & frame) {
-            return frame.candidate.has_value() && frame.candidate->slot == selected_candidate->slot &&
-                   frame.candidate->armor_name == selected_candidate->armor_name &&
-                   frame.candidate->timestamp == selected_candidate->timestamp;
+            return same_candidate_frame(frame, selected_candidate.value());
           });
         if (selected_frame != candidate_frames.end()) best_omni_result = selected_frame->result;
+
+        const auto decision = omniperception::evaluate_omni_retarget(
+          selected_candidate.value(), reference_omni_target, gimbal_state.big_yaw,
+          omni_retarget_cd_active, omni_retarget_min_delta_deg);
+        omni_candidate_delta_deg = decision.candidate_delta_deg;
+        omni_same_target_continuation = decision.same_target_continuation;
+
+        if (decision.accept) {
+          command = selected_candidate->command;
+          omni_hold_command = command;
+          const auto accepted_target = make_accepted_omni_target(selected_candidate.value());
+          session_accepted_omni_target = accepted_target;
+          if (
+            !active_omni_timeout_running || !active_omni_timeout_target.has_value() ||
+            !same_omni_target_continuation(
+              active_omni_timeout_target.value(), accepted_target, omni_retarget_min_delta_deg)) {
+            active_omni_timeout_started_at = now;
+            active_omni_timeout_running = true;
+          }
+          active_omni_timeout_target = accepted_target;
+          omni_target_abs_yaw_deg = command.big_yaw * 57.3;
+          if (omniperception::should_start_omni_retarget_cooldown(
+                decision, omni_retarget_min_delta_deg)) {
+            cooldown_anchor_omni_target = accepted_target;
+            omni_retarget_cooldown_deadline = now + omni_retarget_cooldown;
+            omni_retarget_cd_active = true;
+            omni_retarget_remaining_ms = omni_retarget_cooldown_s * 1e3;
+          }
+        } else if (reference_omni_target.has_value()) {
+          command = reference_omni_target->command;
+          omni_hold_command = command;
+          omni_target_abs_yaw_deg = command.big_yaw * 57.3;
+          omni_retarget_blocked = true;
+          omni_block_reason = decision.block_reason;
+        }
       } else if (omni_hold_command.has_value()) {
         const double target_error_deg = angular_distance_deg(omni_hold_command->big_yaw, gimbal_state.big_yaw);
         if (target_error_deg > omni_hold_release_tolerance_deg) {
-          omni_command = omni_hold_command.value();
-          omni_target_abs_yaw_deg = omni_command.big_yaw * 57.3;
+          command = omni_hold_command.value();
+          omni_target_abs_yaw_deg = command.big_yaw * 57.3;
           omni_hold_applied = true;
         } else {
           omni_hold_command.reset();
         }
+      } else {
+        omni_hold_command.reset();
+        clear_omni_timeout_session();
       }
 
-      if (omni_command.control && omni_command.has_target_yaw) {
-        omni_target_error_deg = angular_distance_deg(omni_command.big_yaw, gimbal_state.big_yaw);
+      if (command.control && command.has_target_yaw) {
+        if (active_omni_timeout_running && active_omni_timeout_target.has_value()) {
+          omni_cmd_timeout_active = true;
+          omni_cmd_elapsed_ms =
+            std::chrono::duration<double, std::milli>(now - active_omni_timeout_started_at).count();
+        }
+
+        const double target_error_deg = angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
+        if (target_error_deg > omni_hold_release_tolerance_deg) {
+          if (
+            active_omni_timeout_running &&
+            (now - active_omni_timeout_started_at) > omni_command_timeout) {
+            tools::logger()->warn(
+              "[OVSentryOmniMPC] omni command timed out after {:.0f}ms without reaching target yaw",
+              omni_cmd_elapsed_ms);
+            command = io::Command{false, false, 0.0, 0.0};
+            omni_target_abs_yaw_deg.reset();
+            omni_hold_applied = false;
+            omni_cmd_timed_out = true;
+            omni_cmd_timeout_active = false;
+            clear_omni_redirect_state();
+          }
+        } else {
+          clear_omni_timeout_session();
+        }
+      } else {
+        clear_omni_timeout_session();
       }
 
-      const double omni_big_yaw = omni_command.has_target_yaw ? omni_command.big_yaw : omni_command.yaw;
-      const double omni_small_yaw =
-        omni_command.has_target_yaw ? omni_command.small_yaw : omni_command.yaw;
+      if (command.control && command.has_target_yaw) {
+        omni_target_error_deg = angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
+        omni_target_reached = omni_target_error_deg.value() <= omni_hold_release_tolerance_deg;
+        if (omni_hold_command.has_value() && omni_target_reached) {
+          omni_hold_command.reset();
+        }
+      }
+
+      const double omni_big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
+      const double omni_small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
       gimbal->send_mpc(
-        omni_command.control, omni_command.shoot, omni_big_yaw, omni_small_yaw, omni_command.pitch,
-        0.0, 0.0, 0.0, 0.0, static_cast<uint8_t>(omni_command.armor_id), 0.0, 0.0, 0.0);
+        command.control, command.shoot, omni_big_yaw, omni_small_yaw, command.pitch,
+        0.0, 0.0, 0.0, 0.0, static_cast<uint8_t>(command.armor_id), 0.0, 0.0, 0.0);
     } else {
       left_img.release();
       right_img.release();
       back_img.release();
-      omni_hold_command.reset();
+      clear_omni_redirect_state();
 
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (tracker_state == "tracking" && command.control && !targets.empty()) {
@@ -684,11 +859,30 @@ int main(int argc, char * argv[])
     data["target_vy"] = command.vy;
     data["horizon_distance"] = command.horizon_distance;
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;
+    data["omni_target_reached"] = omni_target_reached ? 1 : 0;
+    data["omni_cmd_timeout_active"] = omni_cmd_timeout_active ? 1 : 0;
+    data["omni_cmd_timed_out"] = omni_cmd_timed_out ? 1 : 0;
+    data["omni_cmd_elapsed_ms"] = omni_cmd_elapsed_ms;
+    data["omni_retarget_cd_active"] = omni_retarget_cd_active ? 1 : 0;
+    data["omni_retarget_blocked"] = omni_retarget_blocked ? 1 : 0;
+    data["omni_retarget_remaining_ms"] = omni_retarget_remaining_ms;
+    data["omni_same_target_continuation"] = omni_same_target_continuation ? 1 : 0;
+    data["omni_block_reason"] = omni_block_reason;
     if (omni_target_abs_yaw_deg.has_value()) data["omni_target_yaw"] = omni_target_abs_yaw_deg.value();
+    if (omni_candidate_abs_yaw_deg.has_value()) data["omni_candidate_abs_yaw"] = omni_candidate_abs_yaw_deg.value();
+    if (omni_candidate_base_big_yaw_deg.has_value()) {
+      data["omni_candidate_base_big_yaw"] = omni_candidate_base_big_yaw_deg.value();
+    }
+    if (omni_candidate_age_ms.has_value()) data["omni_candidate_age_ms"] = omni_candidate_age_ms.value();
+    if (omni_candidate_delta_deg.has_value()) data["omni_candidate_delta_deg"] = omni_candidate_delta_deg.value();
     if (omni_target_error_deg.has_value()) data["omni_target_error_deg"] = omni_target_error_deg.value();
+    if (omni_selected_confidence.has_value()) data["omni_selected_confidence"] = omni_selected_confidence.value();
+    if (omni_selected_priority.has_value()) data["omni_selected_priority"] = omni_selected_priority.value();
+    if (omni_selected_slot.has_value()) data["omni_selected_slot"] = omni_selected_slot.value();
     data["yolo_time"] = tools::delta_time(t1, t0) * 1e3;
     plotter.plot(data);
 
+    prev_omni_mode = omni_mode;
     if (!display) continue;
 
     draw_auto_aim_overlay(main_img, targets, aimer, solver);
@@ -702,6 +896,29 @@ int main(int argc, char * argv[])
     if (omni_target_abs_yaw_deg.has_value()) {
       tools::draw_text(main_img, fmt::format("omni target yaw={:.2f}", omni_target_abs_yaw_deg.value()),
         {10, 90}, {0, 255, 255}, 0.8, 2);
+    }
+    if (omni_retarget_cd_active) {
+      tools::draw_text(
+        main_img, fmt::format("omni retarget cd {:.0f}ms", omni_retarget_remaining_ms),
+        {10, 120}, omni_retarget_blocked ? cv::Scalar(0, 180, 255) : cv::Scalar(255, 220, 0), 0.8,
+        2);
+    }
+    if (omni_cmd_timeout_active || omni_cmd_timed_out) {
+      tools::draw_text(
+        main_img,
+        fmt::format(
+          "omni cmd timeout {:.0f}/{:.0f}ms hit={}", omni_cmd_elapsed_ms,
+          omni_command_timeout_s * 1e3, omni_cmd_timed_out ? 1 : 0),
+        {10, 150}, omni_cmd_timed_out ? cv::Scalar(0, 120, 255) : cv::Scalar(180, 255, 180), 0.8,
+        2);
+    }
+    if (omni_target_error_deg.has_value()) {
+      tools::draw_text(
+        main_img,
+        fmt::format(
+          "omni target err={:.1f} reached={}", omni_target_error_deg.value(),
+          omni_target_reached ? 1 : 0),
+        {10, 180}, {180, 255, 180}, 0.8, 2);
     }
 
     cv::Mat left_show = left_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : left_img.clone();
