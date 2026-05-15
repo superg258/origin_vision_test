@@ -139,7 +139,7 @@ class ArmorIgnoreSubscriber
 public:
   ArmorIgnoreSubscriber(
     const std::string & topic = "/request_auto_aim_ignore",
-    const std::string & msg_type = "auto_aim_interfaces/msg/RequestAutoAimIgnore")
+    const std::string & msg_type = "rm_interfaces/msg/RequestAutoAimIgnore")
   {
     if (!rclcpp::ok()) {
       rclcpp::init(0, nullptr);
@@ -493,7 +493,7 @@ int main(int argc, char * argv[])
                                               : "/request_auto_aim_ignore";
   const std::string auto_aim_ignore_msg_type =
     yaml["auto_aim_ignore_msg_type"] ? yaml["auto_aim_ignore_msg_type"].as<std::string>()
-                                     : "auto_aim_interfaces/msg/RequestAutoAimIgnore";
+                                     : "rm_interfaces/msg/RequestAutoAimIgnore";
 
   const double omni_fov_h_deg = read_cli_or_yaml_double("fov_h", "omni_fov_h_deg", 120.0);
   const double omni_fov_v_deg = read_cli_or_yaml_double("fov_v", "omni_fov_v_deg", 67.0);
