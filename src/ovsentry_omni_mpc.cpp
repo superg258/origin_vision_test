@@ -1,13 +1,18 @@
 #include <fmt/core.h>
 
+#include <fastcdr/Cdr.h>
+#include <fastcdr/FastBuffer.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -100,8 +105,108 @@ std::optional<auto_aim::Armor> pick_top_armor(const std::list<auto_aim::Armor> &
 struct ArmorTargetMask
 {
   bool enabled = false;
-  std::vector<auto_aim::ArmorName> allowed_names;
+  std::vector<uint8_t> ignored_ids;
 };
+
+uint8_t armor_name_to_nav_id(auto_aim::ArmorName name);
+
+std::vector<uint8_t> deserialize_ignore_ids(const rclcpp::SerializedMessage & serialized_message)
+{
+  const auto & raw = serialized_message.get_rcl_serialized_message();
+  eprosima::fastcdr::FastBuffer buffer(reinterpret_cast<char *>(raw.buffer), raw.buffer_length);
+  eprosima::fastcdr::Cdr cdr(buffer);
+  cdr.read_encapsulation();
+
+  uint32_t count = 0;
+  cdr >> count;
+
+  std::vector<uint8_t> ids;
+  ids.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    uint8_t id = 0;
+    cdr >> id;
+    ids.push_back(id);
+  }
+
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  return ids;
+}
+
+class ArmorIgnoreSubscriber
+{
+public:
+  ArmorIgnoreSubscriber(
+    const std::string & topic = "/request_auto_aim_ignore",
+    const std::string & msg_type = "auto_aim_interfaces/msg/RequestAutoAimIgnore")
+  {
+    if (!rclcpp::ok()) {
+      rclcpp::init(0, nullptr);
+      self_initialized_ = true;
+    }
+
+    node_ = std::make_shared<rclcpp::Node>("auto_aim_ignore_subscriber");
+    try {
+      subscription_ = node_->create_generic_subscription(
+        topic, msg_type, rclcpp::SensorDataQoS(),
+        [this](const std::shared_ptr<rclcpp::SerializedMessage> message) {
+          this->callback(message);
+        });
+
+      executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+      executor_->add_node(node_);
+      spin_thread_ = std::thread([this]() { executor_->spin(); });
+      tools::logger()->info("[AutoAimIgnore] Subscribed '{}' as '{}'.", topic, msg_type);
+    } catch (const std::exception & e) {
+      tools::logger()->warn("[AutoAimIgnore] Failed to subscribe '{}': {}", topic, e.what());
+    }
+  }
+
+  ~ArmorIgnoreSubscriber()
+  {
+    if (executor_) executor_->cancel();
+    if (spin_thread_.joinable()) spin_thread_.join();
+    if (executor_ && node_) executor_->remove_node(node_);
+    if (self_initialized_ && rclcpp::ok()) rclcpp::shutdown();
+  }
+
+  ArmorTargetMask mask() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return mask_;
+  }
+
+private:
+  void callback(const std::shared_ptr<rclcpp::SerializedMessage> & message)
+  {
+    try {
+      auto ids = deserialize_ignore_ids(*message);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        mask_.enabled = !ids.empty();
+        mask_.ignored_ids = ids;
+      }
+      for (const auto id : ids) {
+        tools::logger()->info("[AutoAimIgnore] ignore armor id: {}", static_cast<int>(id));
+      }
+    } catch (const std::exception & e) {
+      tools::logger()->warn("[AutoAimIgnore] Failed to parse ignore ids: {}", e.what());
+    }
+  }
+
+  mutable std::mutex mutex_;
+  ArmorTargetMask mask_;
+  bool self_initialized_ = false;
+  std::shared_ptr<rclcpp::Node> node_;
+  std::shared_ptr<rclcpp::GenericSubscription> subscription_;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
+  std::thread spin_thread_;
+};
+
+ArmorTargetMask read_nav_armor_target_mask(const ArmorIgnoreSubscriber & subscriber)
+{
+  return subscriber.mask();
+}
 
 ArmorTargetMask read_nav_armor_target_mask()
 {
@@ -111,25 +216,19 @@ ArmorTargetMask read_nav_armor_target_mask()
   // mask.enabled = true;
   // mask.allowed_names = {auto_aim::ArmorName::base};
   mask.enabled = true;
-  mask.allowed_names = {
-    auto_aim::ArmorName::two,     auto_aim::ArmorName::three,
-    auto_aim::ArmorName::four,    auto_aim::ArmorName::five,
-    auto_aim::ArmorName::sentry,  auto_aim::ArmorName::outpost,
-    auto_aim::ArmorName::base};
+  mask.ignored_ids = {};
   return mask;
 }
 
 void apply_armor_target_mask(std::list<auto_aim::Armor> & armors, const ArmorTargetMask & mask)
 {
   if (!mask.enabled) return;
-  if (mask.allowed_names.empty()) {
-    armors.clear();
-    return;
-  }
+  if (mask.ignored_ids.empty()) return;
 
   armors.remove_if([&](const auto_aim::Armor & armor) {
-    return std::find(mask.allowed_names.begin(), mask.allowed_names.end(), armor.name) ==
-           mask.allowed_names.end();
+    const auto id = armor_name_to_nav_id(armor.name);
+    return id != 0 && std::find(mask.ignored_ids.begin(), mask.ignored_ids.end(), id) !=
+                      mask.ignored_ids.end();
   });
 }
 
@@ -161,11 +260,11 @@ uint8_t armor_name_to_nav_id(auto_aim::ArmorName name)
     case auto_aim::ArmorName::five:
       return 5;
     case auto_aim::ArmorName::sentry:
+      return 6;
+    case auto_aim::ArmorName::outpost:
       return 7;
     case auto_aim::ArmorName::base:
-      return 9;
-    case auto_aim::ArmorName::outpost:
-      return 10;
+      return 8;
     default:
       return 0;
   }
@@ -343,6 +442,12 @@ int main(int argc, char * argv[])
     yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
   const auto omni_read_timeout = std::chrono::milliseconds(
     std::max(1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
+  const std::string auto_aim_ignore_topic = yaml["auto_aim_ignore_topic"]
+                                              ? yaml["auto_aim_ignore_topic"].as<std::string>()
+                                              : "/request_auto_aim_ignore";
+  const std::string auto_aim_ignore_msg_type =
+    yaml["auto_aim_ignore_msg_type"] ? yaml["auto_aim_ignore_msg_type"].as<std::string>()
+                                     : "auto_aim_interfaces/msg/RequestAutoAimIgnore";
 
   const double omni_fov_h_deg = read_cli_or_yaml_double("fov_h", "omni_fov_h_deg", 120.0);
   const double omni_fov_v_deg = read_cli_or_yaml_double("fov_v", "omni_fov_v_deg", 67.0);
@@ -368,6 +473,7 @@ int main(int argc, char * argv[])
   constexpr bool yolo_debug = false;
 
   auto gimbal = std::make_unique<io::ROS2Gimbal>(config_path);
+  ArmorIgnoreSubscriber armor_ignore_subscriber(auto_aim_ignore_topic, auto_aim_ignore_msg_type);
   auto auto_aim_camera = std::make_unique<io::Camera>(config_path);
 
   auto_aim::YOLO yolo_auto(config_path, yolo_debug, "auto_aim_device");
@@ -413,7 +519,7 @@ int main(int argc, char * argv[])
     auto t0 = std::chrono::steady_clock::now();
     auto armors = yolo_auto.detect(main_img, frame_count);
     auto t1 = std::chrono::steady_clock::now();
-    const auto armor_target_mask = read_nav_armor_target_mask();
+    const auto armor_target_mask = read_nav_armor_target_mask(armor_ignore_subscriber);
     decider.armor_filter(armors);
     apply_armor_target_mask(armors, armor_target_mask);
     auto targets = tracker.track(armors, main_timestamp);
