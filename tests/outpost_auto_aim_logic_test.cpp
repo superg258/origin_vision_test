@@ -549,5 +549,47 @@ int main()
     }
   }
 
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base(2.20, 0.10, 0.70);
+    const double theta0 = 0.30;
+    const double dt = 0.02;
+    auto first = make_outpost_layer_armor(center_base, theta0, 1);
+    auto second =
+      make_outpost_layer_armor(center_base, theta0 + 0.8 * CV_PI * dt, 1);
+    auto_aim::Target target(first, now, 0.2765, 3, P0_dig);
+    const auto second_t = now + std::chrono::milliseconds(20);
+    target.predict(second_t);
+    target.update(second);
+
+    if (!expect(
+          !target.outpost_layer_locked(),
+          "same-layer two-frame outpost should still wait for layer lock")) {
+      return 1;
+    }
+    if (!expect(
+          target.outpost_unlocked_prediction_ready(),
+          "same-layer two-frame outpost should expose a short-horizon prediction preview")) {
+      return 1;
+    }
+
+    auto_aim::Aimer aimer(config_path);
+    std::list<auto_aim::Target> targets{target};
+    const auto command = aimer.aim(targets, second_t, 27.0, false);
+
+    if (!expect(command.control, "aimer should keep control while using unlocked outpost preview")) {
+      return 1;
+    }
+    if (!expect(aimer.debug_aim_point.valid, "preview aim point should be valid")) return 1;
+
+    const double lead_angle =
+      tools::limit_rad(aimer.debug_aim_point.xyza[3] - second.ypr_in_world[0]);
+    if (!expect(
+          lead_angle > 0.12 && lead_angle < 0.8,
+          "unlocked outpost preview should lead the last observation before full convergence")) {
+      return 1;
+    }
+  }
+
   return 0;
 }

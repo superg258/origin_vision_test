@@ -70,7 +70,8 @@ io::Command Aimer::aim(
     return {false, false, 0, 0};
   }
 
-  if (target.name == ArmorName::outpost && !target.outpost_layer_locked()) {
+  if (target.name == ArmorName::outpost && !target.outpost_layer_locked() &&
+      !target.outpost_unlocked_prediction_ready()) {
     const double yaw = std::atan2(xyz0.y(), xyz0.x()) + yaw_offset_;
     const double pitch = -(trajectory0.pitch + pitch_offset_);
     return {true, false, yaw, pitch};
@@ -164,10 +165,11 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   }
   if (target.name == ArmorName::outpost && !target.outpost_layer_locked()) {
     lock_id_ = -1;
-    if (!target.has_last_observed_armor() || target.last_observed_age() > 0.14) {
+    const double max_age = target.outpost_unlocked_prediction_ready() ? 0.35 : 0.14;
+    if (!target.has_last_observed_armor() || target.last_observed_age() > max_age) {
       return make_point(false, Eigen::Vector4d::Zero(), -1, SRC_INVALID);
     }
-    return make_point(true, target.last_observed_armor_xyza(), 0, SRC_OBSERVED_DIRECT);
+    return make_point(true, armor_xyza_list[0], 0, SRC_OBSERVED_DIRECT);
   }
   if (armor_num == 1) {
     lock_id_ = -1;

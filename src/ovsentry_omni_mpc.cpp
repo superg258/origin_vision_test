@@ -814,7 +814,7 @@ int main(int argc, char * argv[])
       clear_omni_redirect_state();
 
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
-      if (tracker_state == "tracking" && command.control && !targets.empty()) {
+      if (command.control && !targets.empty()) {
         apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
       }
       command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
@@ -858,6 +858,24 @@ int main(int argc, char * argv[])
     data["target_vx"] = command.vx;
     data["target_vy"] = command.vy;
     data["horizon_distance"] = command.horizon_distance;
+    data["aim_source"] = (!omni_mode && command.control) ? aimer.debug_aim_point.source : -1;
+    data["aim_armor_id"] = (!omni_mode && command.control) ? aimer.debug_aim_point.armor_id : -1;
+    if (!targets.empty()) {
+      const auto & target = targets.front();
+      data["target_name"] = auto_aim::ARMOR_NAMES[target.name];
+      data["outpost_layer_locked"] = target.outpost_layer_locked() ? 1 : 0;
+      data["outpost_preview_ready"] = target.outpost_unlocked_prediction_ready() ? 1 : 0;
+      const auto & ekf_data = target.ekf().data;
+      if (ekf_data.count("init_preview_ready")) {
+        data["init_preview_ready"] = ekf_data.at("init_preview_ready");
+      }
+      if (ekf_data.count("init_omega_margin")) {
+        data["init_omega_margin"] = ekf_data.at("init_omega_margin");
+      }
+      if (ekf_data.count("init_margin")) {
+        data["init_margin"] = ekf_data.at("init_margin");
+      }
+    }
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;
     data["omni_target_reached"] = omni_target_reached ? 1 : 0;
     data["omni_cmd_timeout_active"] = omni_cmd_timeout_active ? 1 : 0;

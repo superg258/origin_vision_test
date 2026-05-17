@@ -44,6 +44,7 @@ public:
   Eigen::Vector4d last_observed_armor_xyza() const;
   double last_observed_age() const;
   bool outpost_layer_locked() const;
+  bool outpost_unlocked_prediction_ready() const;
   void set_outpost_association_debug(
     int best_id, const std::array<double, 3> & scores, double best_score,
     const std::string & reject_reason);
@@ -80,11 +81,21 @@ private:
   int outpost_last_layer_ = 0;
   std::deque<OutpostObservation> outpost_init_observations_;
   static constexpr std::size_t OUTPOST_INIT_CACHE_LIMIT = 12;
+  bool outpost_preview_ready_ = false;
+  int outpost_preview_layer_ = -1;
+  double outpost_preview_omega_ = 0.0;
+  double outpost_preview_theta_ = 0.0;
+  double outpost_preview_base_z_ = 0.0;
+  double outpost_preview_base_vz_ = 0.0;
+  Eigen::Vector3d outpost_preview_center_{Eigen::Vector3d::Zero()};
+  Eigen::Vector2d outpost_preview_center_vxy_{Eigen::Vector2d::Zero()};
+  std::chrono::steady_clock::time_point outpost_preview_t_{};
 
   void update_ypda(const Armor & armor, int id);
   void record_observed_armor(const Armor & armor);
   bool is_outpost_model() const;
   Eigen::Vector3d outpost_center_from_armor(const Armor & armor) const;
+  Eigen::Vector4d predicted_unlocked_outpost_xyza() const;
   void observe_unlocked_outpost(const Armor & armor);
   bool try_lock_outpost_layers();
 
