@@ -212,10 +212,6 @@ ArmorTargetMask read_nav_armor_target_mask(const ArmorIgnoreSubscriber & subscri
 ArmorTargetMask read_nav_armor_target_mask()
 {
   ArmorTargetMask mask;
-  // TODO(导航): 后续把这里替换成真实的导航/电控信号。
-  // 例如导航要求只打基地时：
-  // mask.enabled = true;
-  // mask.allowed_names = {auto_aim::ArmorName::base};
   mask.enabled = true;
   mask.ignored_ids = {};
   return mask;
@@ -283,12 +279,19 @@ double target_center_big_yaw_rad(const auto_aim::Target & target, double current
   return nearest_continuous_yaw_rad(wrapped_center_yaw, current_big_yaw_rad);
 }
 
+bool is_unlocked_outpost_target(const auto_aim::Target & target)
+{
+  return target.name == auto_aim::ArmorName::outpost && !target.outpost_layer_locked();
+}
+
 void apply_sentry_tracking_yaws(
   io::Command & command, const auto_aim::Target & target, double current_big_yaw_rad)
 {
   if (!command.control) return;
   command.small_yaw = command.yaw;
-  command.big_yaw = target_center_big_yaw_rad(target, current_big_yaw_rad);
+  command.big_yaw =
+    is_unlocked_outpost_target(target) ? current_big_yaw_rad
+                                      : target_center_big_yaw_rad(target, current_big_yaw_rad);
   command.has_target_yaw = true;
 }
 
@@ -820,11 +823,13 @@ int main(int argc, char * argv[])
       command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
       fill_nav_target_info(command, targets);
 
+      const bool unlocked_outpost =
+        !targets.empty() && is_unlocked_outpost_target(targets.front());
       double small_yaw_vel = 0.0;
       double pitch_vel = 0.0;
       double small_yaw_acc = 0.0;
       double pitch_acc = 0.0;
-      if (command.control && !targets.empty()) {
+      if (command.control && !targets.empty() && !unlocked_outpost) {
         const auto mpc_plan = planner.plan(targets.front(), gimbal->bullet_speed());
         if (mpc_plan.control) {
           small_yaw_vel = mpc_plan.yaw_vel;
@@ -874,6 +879,12 @@ int main(int argc, char * argv[])
       }
       if (ekf_data.count("init_margin")) {
         data["init_margin"] = ekf_data.at("init_margin");
+      }
+      if (target.name == auto_aim::ArmorName::outpost && aimer.debug_aim_point.valid) {
+        const auto x = target.ekf_x();
+        const double center_yaw = std::atan2(x[2], x[0]);
+        data["outpost_aim_phase_deg"] =
+          std::abs(tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw)) * 57.3;
       }
     }
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;

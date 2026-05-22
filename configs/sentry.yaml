@@ -105,6 +105,8 @@ auto_fire: true # 是否由自瞄控制射击
 high_spin_force_fire_enabled: true
 high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
+outpost_fire_require_locked: true
+outpost_fire_max_angle: 18.0 # degree
 
 #####-----decider参数-----#####
 mode: 1

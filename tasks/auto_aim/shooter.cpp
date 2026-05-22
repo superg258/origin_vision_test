@@ -10,6 +10,16 @@
 
 namespace auto_aim
 {
+namespace
+{
+double outpost_aim_phase_abs(const auto_aim::Target & target, const auto_aim::Aimer & aimer)
+{
+  const auto x = target.ekf_x();
+  const double center_yaw = std::atan2(x[2], x[0]);
+  return std::abs(tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw));
+}
+}  // namespace
+
 Shooter::Shooter(const std::string & config_path)
 : last_command_{false, false, 0, 0}, high_spin_force_fire_active_{false}
 {
@@ -21,6 +31,8 @@ Shooter::Shooter(const std::string & config_path)
   high_spin_force_fire_enabled_ = yaml["high_spin_force_fire_enabled"].as<bool>(false);
   high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(12.0);
   high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
+  outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
+  outpost_fire_max_angle_ = yaml["outpost_fire_max_angle"].as<double>(18.0) / 57.3;
   if (high_spin_force_fire_exit_speed_ > high_spin_force_fire_enter_speed_) {
     high_spin_force_fire_exit_speed_ = std::max(0.0, high_spin_force_fire_enter_speed_ * 0.75);
   }
@@ -39,6 +51,21 @@ bool Shooter::shoot(
   const auto & target = targets.front();
   const auto angular_speed = std::abs(target.ekf_x()[7]);
   const bool aim_locked = tracker_tracking && aimer.debug_aim_point.valid;
+
+  if (target.name == ArmorName::outpost) {
+    const bool locked = target.outpost_layer_locked();
+    if ((outpost_fire_require_locked_ && !locked) || !aim_locked) {
+      high_spin_force_fire_active_ = false;
+      last_command_ = command;
+      return false;
+    }
+
+    if (outpost_aim_phase_abs(target, aimer) > outpost_fire_max_angle_) {
+      high_spin_force_fire_active_ = false;
+      last_command_ = command;
+      return false;
+    }
+  }
 
   if (!high_spin_force_fire_enabled_ || !aim_locked) {
     high_spin_force_fire_active_ = false;
