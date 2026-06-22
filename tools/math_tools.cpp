@@ -1,10 +1,46 @@
 #include "math_tools.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <opencv2/core.hpp>  // CV_PI
+#include <stdexcept>
 
 namespace tools
 {
+GimbalAxisOrder parse_gimbal_axis_order(const std::string & value)
+{
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (unsigned char ch : value) {
+    if (std::isalnum(ch)) normalized.push_back(static_cast<char>(std::tolower(ch)));
+  }
+
+  if (
+    normalized == "yawpitch" || normalized == "yawthenpitch" ||
+    normalized == "yawbeforepitch") {
+    return GimbalAxisOrder::yaw_pitch;
+  }
+  if (
+    normalized == "pitchyaw" || normalized == "pitchthenyaw" ||
+    normalized == "pitchbeforeyaw") {
+    return GimbalAxisOrder::pitch_yaw;
+  }
+
+  throw std::runtime_error("Unsupported gimbal_axis_order: " + value);
+}
+
+const char * gimbal_axis_order_name(GimbalAxisOrder order)
+{
+  switch (order) {
+    case GimbalAxisOrder::yaw_pitch:
+      return "yaw_pitch";
+    case GimbalAxisOrder::pitch_yaw:
+      return "pitch_yaw";
+  }
+  return "yaw_pitch";
+}
+
 double limit_rad(double angle)
 {
   while (angle > CV_PI) angle -= 2 * CV_PI;
@@ -174,6 +210,67 @@ Eigen::MatrixXd ypd2xyz_jacobian(const Eigen::Vector3d & ypd)
   // clang-format on
 
   return J;
+}
+
+Eigen::Vector3d gimbal_direction_from_command(
+  double yaw, double pitch, GimbalAxisOrder order)
+{
+  const double cos_yaw = std::cos(yaw);
+  const double sin_yaw = std::sin(yaw);
+  const double cos_pitch = std::cos(pitch);
+  const double sin_pitch = std::sin(pitch);
+
+  switch (order) {
+    case GimbalAxisOrder::yaw_pitch:
+      return {cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch};
+    case GimbalAxisOrder::pitch_yaw:
+      return {cos_pitch * cos_yaw, sin_yaw, -sin_pitch * cos_yaw};
+  }
+
+  return {cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch};
+}
+
+Eigen::Vector2d gimbal_command_from_direction(
+  const Eigen::Vector3d & direction, GimbalAxisOrder order)
+{
+  if (direction.squaredNorm() < 1e-12) return {0.0, 0.0};
+
+  const Eigen::Vector3d unit = direction.normalized();
+
+  if (order == GimbalAxisOrder::yaw_pitch) {
+    return {
+      std::atan2(unit.y(), unit.x()),
+      std::atan2(-unit.z(), std::hypot(unit.x(), unit.y()))};
+  }
+
+  const double sin_yaw = std::clamp(unit.y(), -1.0, 1.0);
+  const double yaw_front = std::asin(sin_yaw);
+  const double yaw_back = sin_yaw >= 0.0 ? CV_PI - yaw_front : -CV_PI - yaw_front;
+  const double bearing = std::atan2(unit.y(), unit.x());
+
+  auto candidate = [&](double yaw) {
+    const double cos_yaw = std::cos(yaw);
+    double pitch = 0.0;
+    if (std::abs(cos_yaw) > 1e-9) {
+      pitch = std::atan2(-unit.z() / cos_yaw, unit.x() / cos_yaw);
+    }
+    return Eigen::Vector2d{limit_rad(yaw), limit_rad(pitch)};
+  };
+
+  const Eigen::Vector2d front = candidate(yaw_front);
+  const Eigen::Vector2d back = candidate(yaw_back);
+  const double front_cost = std::abs(front[1]) + 1e-3 * std::abs(limit_rad(front[0] - bearing));
+  const double back_cost = std::abs(back[1]) + 1e-3 * std::abs(limit_rad(back[0] - bearing));
+  return front_cost <= back_cost ? front : back;
+}
+
+Eigen::Vector2d gimbal_command_from_yaw_elevation(
+  double yaw, double elevation, GimbalAxisOrder order)
+{
+  const double cos_elevation = std::cos(elevation);
+  const Eigen::Vector3d direction{
+    cos_elevation * std::cos(yaw), cos_elevation * std::sin(yaw), std::sin(elevation)};
+  return gimbal_command_from_direction(direction, order);
 }
 
 double delta_time(

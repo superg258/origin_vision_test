@@ -13,6 +13,7 @@
 #include "buff_type.hpp"
 #include "io/command.hpp"
 #include "io/gimbal/gimbal.hpp"
+#include "tools/math_tools.hpp"
 
 namespace auto_buff
 {
@@ -36,6 +37,7 @@ private:
   SmallTarget target_;
   double yaw_offset_;
   double pitch_offset_;
+  tools::GimbalAxisOrder gimbal_axis_order_{tools::GimbalAxisOrder::yaw_pitch};
 
   double fire_gap_time_;
   double predict_time_;

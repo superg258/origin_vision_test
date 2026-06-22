@@ -15,9 +15,14 @@
 namespace auto_aim
 {
 Aimer::Aimer(const std::string & config_path)
-: left_yaw_offset_(std::nullopt), right_yaw_offset_(std::nullopt)
+: left_yaw_offset_(std::nullopt),
+  right_yaw_offset_(std::nullopt),
+  gimbal_axis_order_(tools::GimbalAxisOrder::yaw_pitch)
 {
   auto yaml = YAML::LoadFile(config_path);
+  if (yaml["gimbal_axis_order"].IsDefined()) {
+    gimbal_axis_order_ = tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>());
+  }
   yaw_offset_ = yaml["yaw_offset"].as<double>() / 57.3;
   pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;
   comming_angle_ = yaml["comming_angle"].as<double>() / 57.3;
@@ -36,6 +41,13 @@ Aimer::Aimer(const std::string & config_path)
 io::Command Aimer::aim(
   std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
+{
+  return aim_with_yaw_offset(targets, timestamp, bullet_speed, yaw_offset_, to_now);
+}
+
+io::Command Aimer::aim_with_yaw_offset(
+  std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  double yaw_offset, bool to_now)
 {
   if (targets.empty()) return {false, false, 0, 0};
   auto target = targets.front();
@@ -72,9 +84,10 @@ io::Command Aimer::aim(
 
   if (target.name == ArmorName::outpost && !target.outpost_layer_locked() &&
       !target.outpost_unlocked_prediction_ready()) {
-    const double yaw = std::atan2(xyz0.y(), xyz0.x()) + yaw_offset_;
-    const double pitch = -(trajectory0.pitch + pitch_offset_);
-    return {true, false, yaw, pitch};
+    const auto yaw_pitch = tools::gimbal_command_from_yaw_elevation(
+      std::atan2(xyz0.y(), xyz0.x()) + yaw_offset, trajectory0.pitch + pitch_offset_,
+      gimbal_axis_order_);
+    return {true, false, yaw_pitch[0], yaw_pitch[1]};
   }
 
   double prev_fly_time = trajectory0.fly_time;
@@ -111,9 +124,10 @@ io::Command Aimer::aim(
   }
 
   const Eigen::Vector3d final_xyz = debug_aim_point.xyza.head(3);
-  const double yaw = std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset_;
-  const double pitch = -(current_traj.pitch + pitch_offset_);
-  return {true, false, yaw, pitch};
+  const auto yaw_pitch = tools::gimbal_command_from_yaw_elevation(
+    std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset, current_traj.pitch + pitch_offset_,
+    gimbal_axis_order_);
+  return {true, false, yaw_pitch[0], yaw_pitch[1]};
 }
 
 io::Command Aimer::aim(
@@ -129,10 +143,7 @@ io::Command Aimer::aim(
     yaw_offset = yaw_offset_;
   }
 
-  auto command = aim(targets, timestamp, bullet_speed, to_now);
-  command.yaw = command.yaw - yaw_offset_ + yaw_offset;
-
-  return command;
+  return aim_with_yaw_offset(targets, timestamp, bullet_speed, yaw_offset, to_now);
 }
 
 AimPoint Aimer::choose_aim_point(const Target & target)

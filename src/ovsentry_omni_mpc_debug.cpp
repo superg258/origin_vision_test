@@ -98,10 +98,15 @@ void apply_sentry_tracking_yaws(
   command.has_target_yaw = true;
 }
 
-void apply_abs_yaw_target(io::Command & command, double abs_yaw_rad)
+void apply_abs_yaw_target(
+  io::Command & command, double abs_yaw_rad, double elevation_rad,
+  tools::GimbalAxisOrder gimbal_axis_order)
 {
   command.control = true;
-  command.yaw = tools::limit_rad(abs_yaw_rad);
+  const auto yaw_pitch =
+    tools::gimbal_command_from_yaw_elevation(abs_yaw_rad, elevation_rad, gimbal_axis_order);
+  command.yaw = yaw_pitch[0];
+  command.pitch = yaw_pitch[1];
   command.big_yaw = abs_yaw_rad;
   command.small_yaw = command.yaw;
   command.has_target_yaw = true;
@@ -114,7 +119,7 @@ double horizon_distance(const auto_aim::Target & target)
 }
 
 std::optional<omniperception::OmniCandidate> make_candidate(
-  const OmniFrame & frame, const OmniCamConfig & cam)
+  const OmniFrame & frame, const OmniCamConfig & cam, tools::GimbalAxisOrder gimbal_axis_order)
 {
   if (!frame.top_armor.has_value()) return std::nullopt;
   const auto & armor = frame.top_armor.value();
@@ -128,15 +133,16 @@ std::optional<omniperception::OmniCandidate> make_candidate(
   candidate.timestamp = frame.timestamp;
   candidate.base_big_yaw_rad = frame.base_big_yaw_rad;
   candidate.abs_yaw_rad = frame.base_big_yaw_rad + delta_yaw_deg / 57.3;
-  apply_abs_yaw_target(candidate.command, candidate.abs_yaw_rad);
-  candidate.command.pitch = 0.26 + delta_pitch_deg / 57.3;
+  const double pitch_command = 0.26 + delta_pitch_deg / 57.3;
+  apply_abs_yaw_target(
+    candidate.command, candidate.abs_yaw_rad, -pitch_command, gimbal_axis_order);
   return candidate;
 }
 
 OmniFrame detect_omni_frame(
   io::USBCamera & camera, auto_aim::YOLO & yolo, io::ROS2Gimbal & gimbal,
   omniperception::Decider & decider, cv::Mat & img, std::chrono::milliseconds timeout,
-  const OmniCamConfig & cam_cfg, int frame_count)
+  const OmniCamConfig & cam_cfg, int frame_count, tools::GimbalAxisOrder gimbal_axis_order)
 {
   OmniFrame frame;
   const bool ok = camera.read_with_timeout(img, frame.timestamp, timeout);
@@ -147,7 +153,7 @@ OmniFrame detect_omni_frame(
   decider.armor_filter(frame.armors);
   decider.set_priority(frame.armors);
   frame.top_armor = pick_top_armor(frame.armors);
-  frame.candidate = make_candidate(frame, cam_cfg);
+  frame.candidate = make_candidate(frame, cam_cfg, gimbal_axis_order);
   return frame;
 }
 }  // namespace
@@ -174,6 +180,10 @@ int main(int argc, char * argv[])
   }
 
   auto yaml = tools::load(config_path);
+  const tools::GimbalAxisOrder gimbal_axis_order = yaml["gimbal_axis_order"]
+                                                     ? tools::parse_gimbal_axis_order(
+                                                         yaml["gimbal_axis_order"].as<std::string>())
+                                                     : tools::GimbalAxisOrder::yaw_pitch;
   auto read_cam_path = [&](const std::string & cli_key, const std::string & yaml_key,
                            const std::string & fallback) {
       const auto cli_value = cli.get<std::string>(cli_key);
@@ -314,11 +324,14 @@ int main(int argc, char * argv[])
 
     const auto gimbal_state = gimbal->state();
     auto left_frame = detect_omni_frame(
-      cam_left, yolo_omni_left, *gimbal, decider, left_img, omni_read_timeout, left_cam_cfg, frame_count);
+      cam_left, yolo_omni_left, *gimbal, decider, left_img, omni_read_timeout, left_cam_cfg,
+      frame_count, gimbal_axis_order);
     auto right_frame = detect_omni_frame(
-      cam_right, yolo_omni_right, *gimbal, decider, right_img, omni_read_timeout, right_cam_cfg, frame_count);
+      cam_right, yolo_omni_right, *gimbal, decider, right_img, omni_read_timeout, right_cam_cfg,
+      frame_count, gimbal_axis_order);
     auto back_frame = detect_omni_frame(
-      cam_back, yolo_omni_back, *gimbal, decider, back_img, omni_read_timeout, back_cam_cfg, frame_count);
+      cam_back, yolo_omni_back, *gimbal, decider, back_img, omni_read_timeout, back_cam_cfg,
+      frame_count, gimbal_axis_order);
 
     std::vector<omniperception::OmniCandidate> candidates;
     if (left_frame.candidate.has_value()) candidates.push_back(left_frame.candidate.value());

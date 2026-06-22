@@ -3,9 +3,18 @@
 
 #include <Eigen/Geometry>
 #include <chrono>
+#include <string>
 
 namespace tools
 {
+enum class GimbalAxisOrder
+{
+  yaw_pitch,
+  pitch_yaw
+};
+
+GimbalAxisOrder parse_gimbal_axis_order(const std::string & value);
+const char * gimbal_axis_order_name(GimbalAxisOrder order);
 // 将弧度值限制在(-pi, pi]
 double limit_rad(double angle);
 
@@ -37,6 +46,15 @@ Eigen::Vector3d ypd2xyz(const Eigen::Vector3d & ypd);
 
 // 球坐标系转直角坐标系转换函数对xyz的雅可比矩阵
 Eigen::MatrixXd ypd2xyz_jacobian(const Eigen::Vector3d & ypd);
+
+Eigen::Vector3d gimbal_direction_from_command(
+  double yaw, double pitch, GimbalAxisOrder order = GimbalAxisOrder::yaw_pitch);
+
+Eigen::Vector2d gimbal_command_from_direction(
+  const Eigen::Vector3d & direction, GimbalAxisOrder order = GimbalAxisOrder::yaw_pitch);
+
+Eigen::Vector2d gimbal_command_from_yaw_elevation(
+  double yaw, double elevation, GimbalAxisOrder order = GimbalAxisOrder::yaw_pitch);
 
 // 计算时间差a - b，单位：s
 double delta_time(

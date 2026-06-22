@@ -12,6 +12,7 @@
 
 #include "io/cboard.hpp"
 #include "io/command.hpp"
+#include "tools/math_tools.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tools/thread_safe_queue.hpp"
 
@@ -101,6 +102,7 @@ private:
   double pitch_vel_ = 0.0;
   double bullet_speed_ = 23.0;
   double big_yaw_ = 0.0;
+  tools::GimbalAxisOrder gimbal_axis_order_{tools::GimbalAxisOrder::yaw_pitch};
 
   BridgeConfig bridge_config_;
   std::chrono::microseconds imu_query_offset_{-1000};

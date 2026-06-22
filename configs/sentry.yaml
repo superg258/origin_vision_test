@@ -87,6 +87,9 @@ min_detect_count: 5
 max_temp_lost_count: 25
 outpost_max_temp_lost_count: 75
 
+#####-----云台轴序参数-----#####
+gimbal_axis_order: pitch_yaw # yaw_pitch: yaw轴在外；pitch_yaw: pitch轴在外
+
 #####-----aimer参数-----#####
 yaw_offset: 0.75 # degree -2.5
 pitch_offset: -1  # degree 2

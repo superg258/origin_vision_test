@@ -13,6 +13,10 @@ namespace auto_aim
 Planner::Planner(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
+  gimbal_axis_order_ = tools::GimbalAxisOrder::yaw_pitch;
+  if (yaml["gimbal_axis_order"]) {
+    gimbal_axis_order_ = tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>());
+  }
   yaw_offset_ = tools::read<double>(yaml, "yaw_offset") / 57.3;
   pitch_offset_ = tools::read<double>(yaml, "pitch_offset") / 57.3;
   fire_thresh_ = tools::read<double>(yaml, "fire_thresh");
@@ -173,7 +177,8 @@ Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_sp
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
   if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
 
-  return {tools::limit_rad(azim + yaw_offset_), -bullet_traj.pitch - pitch_offset_};
+  return tools::gimbal_command_from_yaw_elevation(
+    azim + yaw_offset_, bullet_traj.pitch + pitch_offset_, gimbal_axis_order_);
 }
 
 Trajectory Planner::get_trajectory(Target & target, double yaw0, double bullet_speed)

@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "tasks/auto_aim/target.hpp"
+#include "tools/math_tools.hpp"
 #include "tinympc/tiny_api.hpp"
 
 namespace auto_aim
@@ -44,6 +45,7 @@ private:
   double pitch_offset_;
   double fire_thresh_;
   double low_speed_delay_time_, high_speed_delay_time_, decision_speed_;
+  tools::GimbalAxisOrder gimbal_axis_order_;
 
   TinySolver * yaw_solver_;
   TinySolver * pitch_solver_;

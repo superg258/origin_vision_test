@@ -9,6 +9,7 @@
 #include "io/cboard.hpp"
 #include "io/command.hpp"
 #include "target.hpp"
+#include "tools/math_tools.hpp"
 
 namespace auto_aim
 {
@@ -44,7 +45,12 @@ private:
   double high_speed_delay_time_;
   double low_speed_delay_time_;
   double decision_speed_;
+  tools::GimbalAxisOrder gimbal_axis_order_;
   int lock_id_ = -1;
+
+  io::Command aim_with_yaw_offset(
+    std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+    double yaw_offset, bool to_now);
 
   AimPoint choose_aim_point(const Target & target);
 };

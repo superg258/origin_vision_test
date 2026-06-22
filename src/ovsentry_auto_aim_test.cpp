@@ -74,6 +74,7 @@ int main(int argc, char * argv[])
     recorder.record(img, q, timestamp);
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+    const auto gimbal_state = gimbal.state();
     double roll = ypr[2] * 57.3;
     double pitch = ypr[1] * 57.3;
     double yaw = ypr[0] * 57.3;
@@ -90,7 +91,9 @@ int main(int argc, char * argv[])
     auto command = aimer.aim(targets, timestamp, gimbal.bullet_speed(), aimer_to_now);
     auto aimer_end = std::chrono::steady_clock::now();
 
-    command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker.state() == "tracking");
+    const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
+    command.shoot =
+      shooter.shoot(command, aimer, targets, motor_ypr, tracker.state() == "tracking");
     gimbal.send(command);
 
     double yolo_time = tools::delta_time(yolo_end, yolo_start) * 1e3;

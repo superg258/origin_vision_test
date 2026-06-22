@@ -327,10 +327,15 @@ void apply_sentry_tracking_yaws(
   command.has_target_yaw = true;
 }
 
-void apply_abs_yaw_target(io::Command & command, double abs_yaw_rad)
+void apply_abs_yaw_target(
+  io::Command & command, double abs_yaw_rad, double elevation_rad,
+  tools::GimbalAxisOrder gimbal_axis_order)
 {
   command.control = true;
-  command.yaw = tools::limit_rad(abs_yaw_rad);
+  const auto yaw_pitch =
+    tools::gimbal_command_from_yaw_elevation(abs_yaw_rad, elevation_rad, gimbal_axis_order);
+  command.yaw = yaw_pitch[0];
+  command.pitch = yaw_pitch[1];
   command.big_yaw = abs_yaw_rad;
   command.small_yaw = command.yaw;
   command.has_target_yaw = true;
@@ -338,7 +343,7 @@ void apply_abs_yaw_target(io::Command & command, double abs_yaw_rad)
 
 std::optional<omniperception::OmniCandidate> build_omni_candidate(
   const OmniInferenceResult & result, std::chrono::steady_clock::time_point timestamp,
-  double base_big_yaw_rad)
+  double base_big_yaw_rad, tools::GimbalAxisOrder gimbal_axis_order)
 {
   if (!result.top_armor.has_value()) return std::nullopt;
 
@@ -351,9 +356,8 @@ std::optional<omniperception::OmniCandidate> build_omni_candidate(
   candidate.timestamp = timestamp;
   candidate.base_big_yaw_rad = base_big_yaw_rad;
   candidate.abs_yaw_rad = base_big_yaw_rad + result.delta_yaw_deg / 57.3;
-  apply_abs_yaw_target(candidate.command, candidate.abs_yaw_rad);
+  apply_abs_yaw_target(candidate.command, candidate.abs_yaw_rad, -0.26, gimbal_axis_order);
   candidate.command.armor_id = armor_name_to_nav_id(armor.name);
-  candidate.command.pitch = 0.26;
   return candidate;
 }
 
@@ -507,6 +511,10 @@ int main(int argc, char * argv[])
       return fallback;
     };
 
+  const tools::GimbalAxisOrder gimbal_axis_order = yaml["gimbal_axis_order"]
+                                                     ? tools::parse_gimbal_axis_order(
+                                                         yaml["gimbal_axis_order"].as<std::string>())
+                                                     : tools::GimbalAxisOrder::yaw_pitch;
   const std::string auto_aim_device = read_infer_device("auto_aim_device");
   const std::string omni_device = read_infer_device("omni_device");
   const double omni_retarget_cooldown_s =
@@ -719,7 +727,7 @@ int main(int argc, char * argv[])
 
       if (command.control) {
         const double continuous_yaw = nearest_continuous_yaw_rad(command.yaw, gimbal_state.big_yaw);
-        apply_abs_yaw_target(command, continuous_yaw);
+        apply_abs_yaw_target(command, continuous_yaw, -command.pitch, gimbal_axis_order);
       }
 
       const double buff_big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
@@ -777,7 +785,8 @@ int main(int argc, char * argv[])
             auto [dyaw, dpitch] = calc_delta_angle_deg(frame.result.top_armor.value(), cam_cfg);
             frame.result.delta_yaw_deg = dyaw;
             frame.result.delta_pitch_deg = dpitch;
-            frame.candidate = build_omni_candidate(frame.result, frame.timestamp, frame.base_big_yaw_rad);
+            frame.candidate = build_omni_candidate(
+              frame.result, frame.timestamp, frame.base_big_yaw_rad, gimbal_axis_order);
           }
         };
 
@@ -920,7 +929,9 @@ int main(int argc, char * argv[])
       if (command.control && !targets.empty()) {
         apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
       }
-      command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
+      const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
+      command.shoot =
+        shooter.shoot(command, aimer, targets, motor_ypr, tracker_state == "tracking");
       fill_nav_target_info(command, targets);
 
       const bool unlocked_outpost =

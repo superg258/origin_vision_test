@@ -32,11 +32,17 @@ std::chrono::microseconds read_imu_query_offset(const YAML::Node & yaml)
   return std::chrono::microseconds(static_cast<int64_t>(std::llround(offset_s * 1e6)));
 }
 
-Eigen::Quaterniond quaternion_from_deg_euler(double yaw_deg, double pitch_deg, double roll_deg)
+Eigen::Quaterniond quaternion_from_deg_euler(
+  double yaw_deg, double pitch_deg, double roll_deg, tools::GimbalAxisOrder order)
 {
-  return Eigen::AngleAxisd(deg2rad(yaw_deg), Eigen::Vector3d::UnitZ()) *
-         Eigen::AngleAxisd(deg2rad(pitch_deg), Eigen::Vector3d::UnitY()) *
-         Eigen::AngleAxisd(deg2rad(roll_deg), Eigen::Vector3d::UnitX());
+  const Eigen::AngleAxisd yaw(deg2rad(yaw_deg), Eigen::Vector3d::UnitZ());
+  const Eigen::AngleAxisd pitch(deg2rad(pitch_deg), Eigen::Vector3d::UnitY());
+  const Eigen::AngleAxisd roll(deg2rad(roll_deg), Eigen::Vector3d::UnitX());
+
+  if (order == tools::GimbalAxisOrder::pitch_yaw) {
+    return pitch * yaw * roll;
+  }
+  return yaw * pitch * roll;
 }
 
 bool is_valid_quaternion(const Eigen::Quaterniond & q)
@@ -188,12 +194,16 @@ void ROS2Gimbal::send_mpc(
 ROS2Gimbal::ROS2Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
+  if (yaml["gimbal_axis_order"]) {
+    gimbal_axis_order_ = tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>());
+  }
   imu_query_offset_ = read_imu_query_offset(yaml);
   bridge_config_ = load_bridge_config(config_path);
 
   tools::logger()->info(
-    "[ROS2Gimbal] timing offset={:.2f}ms",
-    static_cast<double>(imu_query_offset_.count()) / 1000.0);
+    "[ROS2Gimbal] timing offset={:.2f}ms axis_order={}",
+    static_cast<double>(imu_query_offset_.count()) / 1000.0,
+    tools::gimbal_axis_order_name(gimbal_axis_order_));
 
   if (!rclcpp::ok()) {
     rclcpp::init(0, nullptr);
@@ -304,7 +314,7 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
       bullet_speed, big_yaw_deg);
 
     if (!is_valid_quaternion(q)) {
-      q = quaternion_from_deg_euler(yaw_deg, pitch_deg, roll_deg);
+      q = quaternion_from_deg_euler(yaw_deg, pitch_deg, roll_deg, gimbal_axis_order_);
     } else {
       q.normalize();
     }

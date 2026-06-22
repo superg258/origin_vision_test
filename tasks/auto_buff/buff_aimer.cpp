@@ -9,6 +9,11 @@ namespace auto_buff
 Aimer::Aimer(const std::string & config_path)
 {
   auto yaml = YAML::LoadFile(config_path);
+  gimbal_axis_order_ = tools::GimbalAxisOrder::yaw_pitch;
+  if (yaml["gimbal_axis_order"]) {
+    gimbal_axis_order_ =
+      tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>());
+  }
   yaw_offset_ = yaml["yaw_offset"].as<double>() / 57.3;      // degree to rad
   pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;  // degree to rad
   fire_gap_time_ = yaml["fire_gap_time"].as<double>();
@@ -33,16 +38,18 @@ io::Command Aimer::aim(
   auto future = to_now ? (detect_now_gap + predict_time_) : 0.1 + predict_time_;
   double yaw, pitch;
 
-  bool angle_changed =
-    std::abs(last_yaw_ - yaw) > 5 / 57.3 || std::abs(last_pitch_ - pitch) > 5 / 57.3;
   if (get_send_angle(target, future, bullet_speed, to_now, yaw, pitch)) {
-    command.yaw = yaw;
-    command.pitch = -pitch;  //世界坐标系下的pitch向上为负
+    const auto yaw_pitch =
+      tools::gimbal_command_from_yaw_elevation(yaw, pitch, gimbal_axis_order_);
+    command.yaw = yaw_pitch[0];
+    command.pitch = yaw_pitch[1];
     if (mistake_count_ > 3) {
       switch_fanblade_ = true;
       mistake_count_ = 0;
       command.control = true;
-    } else if (std::abs(last_yaw_ - yaw) > 5 / 57.3 || std::abs(last_pitch_ - pitch) > 5 / 57.3) {
+    } else if (
+      std::abs(last_yaw_ - command.yaw) > 5 / 57.3 ||
+      std::abs(last_pitch_ - command.pitch) > 5 / 57.3) {
       switch_fanblade_ = true;
       mistake_count_++;
       command.control = false;
@@ -51,8 +58,8 @@ io::Command Aimer::aim(
       mistake_count_ = 0;
       command.control = true;
     }
-    last_yaw_ = yaw;
-    last_pitch_ = pitch;
+    last_yaw_ = command.yaw;
+    last_pitch_ = command.pitch;
   }
 
   if (switch_fanblade_) {
@@ -86,17 +93,19 @@ auto_aim::Plan Aimer::mpc_aim(
   auto future = to_now ? (detect_now_gap + predict_time_) : 0.1 + predict_time_;
   double yaw, pitch;
 
-  bool angle_changed =
-    std::abs(last_yaw_ - yaw) > 5 / 57.3 || std::abs(last_pitch_ - pitch) > 5 / 57.3;
   if (get_send_angle(target, future, bullet_speed, to_now, yaw, pitch)) {
-    plan.yaw = yaw;
-    plan.pitch = -pitch;  //世界坐标系下的pitch向上为负
+    const auto yaw_pitch =
+      tools::gimbal_command_from_yaw_elevation(yaw, pitch, gimbal_axis_order_);
+    plan.yaw = yaw_pitch[0];
+    plan.pitch = yaw_pitch[1];
     if (mistake_count_ > 3) {
       switch_fanblade_ = true;
       mistake_count_ = 0;
       plan.control = true;
       first_in_aimer_ = true;
-    } else if (std::abs(last_yaw_ - yaw) > 5 / 57.3 || std::abs(last_pitch_ - pitch) > 5 / 57.3) {
+    } else if (
+      std::abs(last_yaw_ - plan.yaw) > 5 / 57.3 ||
+      std::abs(last_pitch_ - plan.pitch) > 5 / 57.3) {
       switch_fanblade_ = true;
       mistake_count_++;
       plan.control = false;
@@ -107,8 +116,8 @@ auto_aim::Plan Aimer::mpc_aim(
       mistake_count_ = 0;
       plan.control = true;
     }
-    last_yaw_ = yaw;
-    last_pitch_ = pitch;
+    last_yaw_ = plan.yaw;
+    last_pitch_ = plan.pitch;
 
     if (plan.control) {
       if (first_in_aimer_) {
@@ -122,15 +131,19 @@ auto_aim::Plan Aimer::mpc_aim(
         double last_yaw_mpc, last_pitch_mpc;
         get_send_angle(
           target, predict_time_ * -1, bullet_speed, to_now, last_yaw_mpc, last_pitch_mpc);
-        plan.yaw_vel = tools::limit_rad(yaw - last_yaw_mpc) / (2 * dt);
+        const auto last_yaw_pitch = tools::gimbal_command_from_yaw_elevation(
+          last_yaw_mpc, last_pitch_mpc, gimbal_axis_order_);
+        plan.yaw_vel = tools::limit_rad(plan.yaw - last_yaw_pitch[0]) / (2 * dt);
         // plan.yaw_vel = tools::limit_min_max(plan.yaw_vel, -6.28, 6.28);
-        plan.yaw_acc = (tools::limit_rad(yaw - gs.yaw) - tools::limit_rad(gs.yaw - last_yaw_mpc)) /
-                       std::pow(dt, 2);
+        plan.yaw_acc =
+          (tools::limit_rad(plan.yaw - gs.yaw) - tools::limit_rad(gs.yaw - last_yaw_pitch[0])) /
+          std::pow(dt, 2);
         // plan.yaw_acc = tools::limit_min_max(plan.yaw_acc, -50, 50);
 
-        plan.pitch_vel = tools::limit_rad(-pitch + last_pitch_mpc) / (2 * dt);
+        plan.pitch_vel = tools::limit_rad(plan.pitch - last_yaw_pitch[1]) / (2 * dt);
         // plan.pitch_vel = tools::limit_min_max(plan.pitch_vel, -6.28, 6.28);
-        plan.pitch_acc = (-pitch - gs.pitch - (gs.pitch + last_pitch_mpc)) / std::pow(dt, 2);
+        plan.pitch_acc =
+          (plan.pitch - gs.pitch - (gs.pitch - last_yaw_pitch[1])) / std::pow(dt, 2);
         // plan.pitch_acc = tools::limit_min_max(plan.pitch_acc, -100, 100);
       }
     }
