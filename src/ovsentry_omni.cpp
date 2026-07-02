@@ -792,6 +792,13 @@ int main(int argc, char * argv[])
       data["last_id"] = target.last_id;
       data["aim_id"] = aimer.debug_aim_point.armor_id;
       data["aim_source"] = aimer.debug_aim_point.source;
+      if (targets.front().name == auto_aim::ArmorName::outpost && aimer.debug_aim_point.valid) {
+        const auto x = targets.front().ekf_x();
+        const double center_yaw = std::atan2(x[2], x[0]);
+        const double aim_phase = tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw);
+        const double spin_sign = x[7] >= 0.0 ? 1.0 : -1.0;
+        data["outpost_fire_moving_phase_deg"] = aim_phase * spin_sign * 57.3;
+      }
       for (const auto & key :
            {"outpost_selected_id", "outpost_layer_residual", "outpost_phase_residual",
             "outpost_center_speed", "outpost_layer_locked", "init_best_score", "init_margin",

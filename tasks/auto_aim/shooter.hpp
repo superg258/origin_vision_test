@@ -26,6 +26,8 @@ private:
   double high_spin_force_fire_enter_speed_;
   double high_spin_force_fire_exit_speed_;
   double outpost_fire_max_angle_;
+  double outpost_fire_coming_angle_;
+  double outpost_fire_leaving_angle_;
   bool auto_fire_;
   bool high_spin_force_fire_enabled_;
   bool high_spin_force_fire_active_;

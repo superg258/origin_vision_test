@@ -1016,8 +1016,10 @@ int main(int argc, char * argv[])
       if (target.name == auto_aim::ArmorName::outpost && aimer.debug_aim_point.valid) {
         const auto x = target.ekf_x();
         const double center_yaw = std::atan2(x[2], x[0]);
-        data["outpost_aim_phase_deg"] =
-          std::abs(tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw)) * 57.3;
+        const double aim_phase = tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw);
+        const double spin_sign = x[7] >= 0.0 ? 1.0 : -1.0;
+        data["outpost_aim_phase_deg"] = std::abs(aim_phase) * 57.3;
+        data["outpost_fire_moving_phase_deg"] = aim_phase * spin_sign * 57.3;
       }
     }
     data["omni_yaw_hold"] = omni_hold_applied ? 1 : 0;

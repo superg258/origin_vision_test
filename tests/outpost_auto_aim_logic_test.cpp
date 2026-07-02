@@ -13,6 +13,7 @@
 #include "tasks/auto_aim/target.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/aimer.hpp"
+#include "tasks/auto_aim/shooter.hpp"
 #undef private
 
 #include "tasks/auto_aim/aimer.hpp"
@@ -161,6 +162,25 @@ auto_aim::Armor make_detection_outpost_armor(
   armor.points = project_fixed_armor(config_path, xyz, yaw, auto_aim::ArmorName::outpost);
   armor.center = (armor.points[0] + armor.points[1] + armor.points[2] + armor.points[3]) * 0.25f;
   return armor;
+}
+
+auto_aim::Target make_locked_outpost_target(
+  std::chrono::steady_clock::time_point now, double center_yaw, double vyaw)
+{
+  Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+  const Eigen::Vector3d center_base(2.0 * std::cos(center_yaw), 2.0 * std::sin(center_yaw), 1.0);
+  auto first = make_outpost_layer_armor(center_base, center_yaw, 2);
+  auto second = make_outpost_layer_armor(center_base, center_yaw + 0.05, 1);
+  auto third = make_outpost_layer_armor(center_base, center_yaw + 0.10, 0);
+  auto_aim::Target target(first, now, 0.2765, 3, P0_dig);
+  target.predict(now + std::chrono::milliseconds(20));
+  target.update(second);
+  target.predict(now + std::chrono::milliseconds(40));
+  target.update(third);
+  target.ekf_.x[0] = center_base[0];
+  target.ekf_.x[2] = center_base[1];
+  target.ekf_.x[7] = vyaw;
+  return target;
 }
 
 }  // namespace
@@ -587,6 +607,45 @@ int main()
     if (!expect(
           lead_angle > 0.12 && lead_angle < 0.8,
           "unlocked outpost preview should lead the last observation before full convergence")) {
+      return 1;
+    }
+  }
+
+  {
+    auto make_fire_decision = [&](double vyaw, double phase_deg) {
+      auto_aim::Shooter shooter(config_path);
+      auto_aim::Aimer aimer(config_path);
+      auto target = make_locked_outpost_target(now, 0.0, vyaw);
+      aimer.debug_aim_point.valid = true;
+      aimer.debug_aim_point.xyza = Eigen::Vector4d(2.0, 0.0, 1.0, phase_deg / 57.3);
+      std::list<auto_aim::Target> targets{target};
+      const io::Command command{true, false, 0.0, 0.0};
+      return shooter.shoot(command, aimer, targets, Eigen::Vector3d::Zero(), true);
+    };
+
+    if (!expect(
+          !make_fire_decision(2.0, -10.0),
+          "outpost should not fire when armor is still coming by 10deg")) {
+      return 1;
+    }
+    if (!expect(
+          make_fire_decision(2.0, -2.0),
+          "outpost should fire when armor is near center on the coming side")) {
+      return 1;
+    }
+    if (!expect(
+          make_fire_decision(2.0, 10.0),
+          "outpost should fire after armor passes the center")) {
+      return 1;
+    }
+    if (!expect(
+          !make_fire_decision(2.0, 22.0),
+          "outpost should stop firing after leaving the asymmetric window")) {
+      return 1;
+    }
+    if (!expect(
+          !make_fire_decision(-2.0, 10.0),
+          "outpost coming-side fire window should follow reverse spin direction")) {
       return 1;
     }
   }
