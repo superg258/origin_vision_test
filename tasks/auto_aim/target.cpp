@@ -1,6 +1,7 @@
 #include "target.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -19,15 +20,18 @@ constexpr double NORMAL_YAW_PROCESS_NOISE = 400.0;
 constexpr double OUTPOST_XY_PROCESS_NOISE = 640.0;
 constexpr double OUTPOST_Z_PROCESS_NOISE = 40.0;
 constexpr double OUTPOST_YAW_PROCESS_NOISE = 4.0;
-constexpr double OUTPOST_INIT_Z_RESIDUAL_GATE = 0.035;
-constexpr double OUTPOST_INIT_Z_MAX_RESIDUAL = 0.075;
+constexpr std::size_t OUTPOST_INIT_LOCK_MIN_OBSERVATIONS = 2;
+constexpr double OUTPOST_INIT_LOCK_MAX_SCORE = 35.0;
+constexpr double OUTPOST_INIT_LOCK_MIN_MARGIN = 0.0;
+constexpr double OUTPOST_INIT_Z_RESIDUAL_GATE = 0.05;
+constexpr double OUTPOST_INIT_Z_MAX_RESIDUAL = 0.12;
 constexpr double OUTPOST_INIT_Z_VELOCITY_GATE = 1.2;
-constexpr double OUTPOST_INIT_Z_MAX_VELOCITY = 3.5;
-constexpr double OUTPOST_PREVIEW_MAX_SCORE = 28.0;
-constexpr double OUTPOST_PREVIEW_MAX_Z_RESIDUAL = 0.10;
+constexpr double OUTPOST_INIT_Z_MAX_VELOCITY = 5.0;
+constexpr double OUTPOST_PREVIEW_MAX_SCORE = 45.0;
+constexpr double OUTPOST_PREVIEW_MAX_Z_RESIDUAL = 0.15;
 constexpr double OUTPOST_PREVIEW_MAX_CENTER_SPEED = 8.0;
 constexpr double OUTPOST_PREVIEW_MAX_AGE = 0.35;
-constexpr double OUTPOST_PREVIEW_MIN_OMEGA_MARGIN = 0.02;
+constexpr double OUTPOST_PREVIEW_MIN_OMEGA_MARGIN = 0.0;
 
 double armor_angle_offset(int id, int armor_num, ArmorName name)
 {
@@ -769,8 +773,10 @@ bool Target::try_lock_outpost_layers()
     ekf_.data["init_preview_ready"] = 1.0;
   }
 
-  if (outpost_init_observations_.size() < 3 || best.distinct_layers < 2 || best.score > 18.0 ||
-      margin < 0.05 || best.max_z_residual > OUTPOST_INIT_Z_MAX_RESIDUAL ||
+  if (outpost_init_observations_.size() < OUTPOST_INIT_LOCK_MIN_OBSERVATIONS ||
+      best.distinct_layers < 2 || best.score > OUTPOST_INIT_LOCK_MAX_SCORE ||
+      margin < OUTPOST_INIT_LOCK_MIN_MARGIN ||
+      best.max_z_residual > OUTPOST_INIT_Z_MAX_RESIDUAL ||
       std::abs(best.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY) {
     return false;
   }
