@@ -608,7 +608,7 @@ int main(int argc, char * argv[])
 
     frame_count++;
     Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
-    recorder.record(main_img, main_timestamp);
+    recorder.record(main_img,q, main_timestamp);
     solver.set_R_gimbal2world(q);
     buff_solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
