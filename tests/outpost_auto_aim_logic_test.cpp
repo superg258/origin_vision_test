@@ -624,8 +624,8 @@ int main()
     };
 
     if (!expect(
-          !make_fire_decision(2.0, -10.0),
-          "outpost should not fire when armor is still coming by 10deg")) {
+          make_fire_decision(2.0, -10.0),
+          "stable outpost mode should not reject fire solely by coming-side phase")) {
       return 1;
     }
     if (!expect(
@@ -639,13 +639,13 @@ int main()
       return 1;
     }
     if (!expect(
-          !make_fire_decision(2.0, 22.0),
-          "outpost should stop firing after leaving the asymmetric window")) {
+          make_fire_decision(2.0, 22.0),
+          "stable outpost mode should not reject fire solely by leaving-side phase")) {
       return 1;
     }
     if (!expect(
-          !make_fire_decision(-2.0, 10.0),
-          "outpost coming-side fire window should follow reverse spin direction")) {
+          make_fire_decision(-2.0, 10.0),
+          "stable outpost mode should not depend on spin direction phase window")) {
       return 1;
     }
   }

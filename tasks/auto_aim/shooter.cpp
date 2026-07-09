@@ -39,6 +39,7 @@ Shooter::Shooter(const std::string & config_path)
   high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(12.0);
   high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
   outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
+  outpost_fire_use_phase_window_ = yaml["outpost_fire_use_phase_window"].as<bool>(false);
   outpost_fire_max_angle_ = yaml["outpost_fire_max_angle"].as<double>(18.0) / 57.3;
   outpost_fire_coming_angle_ =
     yaml["outpost_fire_coming_angle"].as<double>(3.0) / 57.3;
@@ -71,17 +72,20 @@ bool Shooter::shoot(
       return false;
     }
 
-    const double moving_phase = outpost_moving_phase(target, aimer);
-    if (
-      moving_phase < -outpost_fire_coming_angle_ ||
-      moving_phase > outpost_fire_leaving_angle_) {
-      high_spin_force_fire_active_ = false;
-      last_command_ = command;
-      return false;
+    if (outpost_fire_use_phase_window_) {
+      const double moving_phase = outpost_moving_phase(target, aimer);
+      if (
+        moving_phase < -outpost_fire_coming_angle_ ||
+        moving_phase > outpost_fire_leaving_angle_) {
+        high_spin_force_fire_active_ = false;
+        last_command_ = command;
+        return false;
+      }
     }
   }
 
-  if (!high_spin_force_fire_enabled_ || !aim_locked) {
+  const bool allow_high_spin_force_fire = target.name != ArmorName::outpost;
+  if (!allow_high_spin_force_fire || !high_spin_force_fire_enabled_ || !aim_locked) {
     high_spin_force_fire_active_ = false;
   } else if (high_spin_force_fire_active_) {
     if (angular_speed < high_spin_force_fire_exit_speed_) high_spin_force_fire_active_ = false;
