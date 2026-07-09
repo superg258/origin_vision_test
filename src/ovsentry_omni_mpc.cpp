@@ -1010,11 +1010,32 @@ int main(int argc, char * argv[])
       if (ekf_data.count("init_preview_ready")) {
         data["init_preview_ready"] = ekf_data.at("init_preview_ready");
       }
+      if (ekf_data.count("init_best_score")) {
+        data["init_best_score"] = ekf_data.at("init_best_score");
+      }
       if (ekf_data.count("init_omega_margin")) {
         data["init_omega_margin"] = ekf_data.at("init_omega_margin");
       }
       if (ekf_data.count("init_margin")) {
         data["init_margin"] = ekf_data.at("init_margin");
+      }
+      if (ekf_data.count("init_distinct_layers")) {
+        data["init_distinct_layers"] = ekf_data.at("init_distinct_layers");
+      }
+      if (ekf_data.count("init_z_vz")) {
+        data["init_z_vz"] = ekf_data.at("init_z_vz");
+      }
+      if (ekf_data.count("init_z_max_residual")) {
+        data["init_z_max_residual"] = ekf_data.at("init_z_max_residual");
+      }
+      if (ekf_data.count("outpost_selected_id")) {
+        data["outpost_selected_id"] = ekf_data.at("outpost_selected_id");
+      }
+      if (ekf_data.count("outpost_layer_residual")) {
+        data["outpost_layer_residual"] = ekf_data.at("outpost_layer_residual");
+      }
+      if (ekf_data.count("outpost_phase_residual")) {
+        data["outpost_phase_residual"] = ekf_data.at("outpost_phase_residual");
       }
       if (target.name == auto_aim::ArmorName::outpost && aimer.debug_aim_point.valid) {
         const auto x = target.ekf_x();

@@ -92,8 +92,8 @@ yaw_offset: 0.75 # degree -2.5
 pitch_offset: -1 # degree 
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
-outpost_aim_coming_angle: 90 # degree, stable outpost mode: accept wider incoming-side aim points
-outpost_aim_leaving_angle: 90 # degree, stable outpost mode: accept wider leaving-side aim points
+outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
+outpost_aim_leaving_angle: 30 # degree, keep target plate stable after it passes center
 resistance_k: 0.023 # 空气阻力系数enemy_color: "red"
 #enemy_color: "blue"
 
@@ -188,8 +188,8 @@ yaw_offset: 0.75 # degree -2.5
 pitch_offset: -0.2 # degree 
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
-outpost_aim_coming_angle: 90 # degree, stable outpost mode: accept wider incoming-side aim points
-outpost_aim_leaving_angle: 90 # degree, stable outpost mode: accept wider leaving-side aim points
+outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
+outpost_aim_leaving_angle: 30 # degree, keep target plate stable after it passes center
 resistance_k: 0.023 # 空气阻力系数tt
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.063 # s

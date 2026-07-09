@@ -22,8 +22,8 @@ Aimer::Aimer(const std::string & config_path)
   pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;
   comming_angle_ = yaml["comming_angle"].as<double>() / 57.3;
   leaving_angle_ = yaml["leaving_angle"].as<double>() / 57.3;
-  outpost_aim_coming_angle_ = yaml["outpost_aim_coming_angle"].as<double>(90.0) / 57.3;
-  outpost_aim_leaving_angle_ = yaml["outpost_aim_leaving_angle"].as<double>(90.0) / 57.3;
+  outpost_aim_coming_angle_ = yaml["outpost_aim_coming_angle"].as<double>(70.0) / 57.3;
+  outpost_aim_leaving_angle_ = yaml["outpost_aim_leaving_angle"].as<double>(30.0) / 57.3;
   resistance_k_ = yaml["resistance_k"].as<double>(0.01);
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
   low_speed_delay_time_ = yaml["low_speed_delay_time"].as<double>();
