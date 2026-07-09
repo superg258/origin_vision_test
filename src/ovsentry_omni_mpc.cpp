@@ -41,6 +41,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/yaml.hpp"
+#include "tools/recorder.hpp"
 
 namespace
 {
@@ -550,6 +551,7 @@ int main(int argc, char * argv[])
 
   tools::Exiter exiter;
   tools::Plotter plotter;
+  tools::Recorder recorder(30);
   const bool display = !cli.has("no-display");
   constexpr bool yolo_debug = false;
 
@@ -606,6 +608,7 @@ int main(int argc, char * argv[])
 
     frame_count++;
     Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
+    recorder.record(main_img, main_timestamp);
     solver.set_R_gimbal2world(q);
     buff_solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
