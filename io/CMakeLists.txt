@@ -45,6 +45,7 @@ find_package(rclcpp QUIET)
 find_package(std_msgs QUIET)
 find_package(rosidl_typesupport_cpp QUIET)
 find_package(sp_msgs QUIET)
+find_package(rm_interfaces QUIET)
 
 set(_ros2_core_ready TRUE)
 if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND)
@@ -72,8 +73,9 @@ if(_ros2_core_ready)
 endif()
 
 set(_sentry_special_missing_deps "")
-if(NOT fastcdr_FOUND)
-    list(APPEND _sentry_special_missing_deps "fastcdr")
+# [[cyclonedds]] typed messages need rm_interfaces instead of fastcdr
+if(NOT rm_interfaces_FOUND)
+    list(APPEND _sentry_special_missing_deps "rm_interfaces")
 endif()
 if(NOT ament_cmake_FOUND)
     list(APPEND _sentry_special_missing_deps "ament_cmake")
@@ -96,8 +98,9 @@ elseif(SENTRY_SPECIAL_MODE STREQUAL "ON")
     add_library(io_ros2_gimbal STATIC
         ros2/ros2_gimbal.cpp
     )
-    ament_target_dependencies(io_ros2_gimbal rclcpp std_msgs)
-    target_link_libraries(io_ros2_gimbal fastcdr)
+    ament_target_dependencies(io_ros2_gimbal rclcpp std_msgs rm_interfaces)
+    # [[cyclonedds]] fastcdr no longer needed for typed messages
+    # target_link_libraries(io_ros2_gimbal fastcdr)
     message(STATUS "Enabled io_ros2_gimbal target (SENTRY_SPECIAL_MODE=ON).")
 else()
     if(_sentry_special_missing_deps)
@@ -106,8 +109,9 @@ else()
         add_library(io_ros2_gimbal STATIC
             ros2/ros2_gimbal.cpp
         )
-        ament_target_dependencies(io_ros2_gimbal rclcpp std_msgs)
-        target_link_libraries(io_ros2_gimbal fastcdr)
+        ament_target_dependencies(io_ros2_gimbal rclcpp std_msgs rm_interfaces)
+        # [[cyclonedds]] fastcdr no longer needed for typed messages
+        # target_link_libraries(io_ros2_gimbal fastcdr)
         message(STATUS "Enabled io_ros2_gimbal target (SENTRY_SPECIAL_MODE=AUTO).")
     endif()
 endif()
