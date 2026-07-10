@@ -264,8 +264,14 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   std::vector<int> direct_ids;
   for (size_t i = 0; i < armor_num; ++i) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-    if (vyaw > 0 && delta_angle_list[i] < leaving_angle) direct_ids.push_back(static_cast<int>(i));
-    if (vyaw < 0 && delta_angle_list[i] > -leaving_angle) direct_ids.push_back(static_cast<int>(i));
+    const bool positive_leaving_ok =
+      target.name == ArmorName::outpost ? delta_angle_list[i] <= leaving_angle
+                                        : delta_angle_list[i] < leaving_angle;
+    const bool negative_leaving_ok =
+      target.name == ArmorName::outpost ? delta_angle_list[i] >= -leaving_angle
+                                        : delta_angle_list[i] > -leaving_angle;
+    if (vyaw > 0 && positive_leaving_ok) direct_ids.push_back(static_cast<int>(i));
+    if (vyaw < 0 && negative_leaving_ok) direct_ids.push_back(static_cast<int>(i));
     if (abs_vyaw < 1e-3) direct_ids.push_back(static_cast<int>(i));
   }
 

@@ -615,20 +615,20 @@ int main()
     auto_aim::Aimer aimer(config_path);
 
     auto positive_target = make_locked_outpost_target(now, 0.0, 2.0);
-    positive_target.ekf_.x[6] = 40.0 / 57.3;
+    positive_target.ekf_.x[6] = 45.0 / 57.3;
     const auto positive_point = aimer.choose_aim_point(positive_target);
     if (!expect(
           positive_point.valid && positive_point.armor_id == 0,
-          "positive-spin outpost should keep the leaving plate through 40 degrees")) {
+          "positive-spin outpost should keep the leaving plate through 45 degrees")) {
       return 1;
     }
 
     auto negative_target = make_locked_outpost_target(now, 0.0, -2.0);
-    negative_target.ekf_.x[6] = -40.0 / 57.3;
+    negative_target.ekf_.x[6] = -45.0 / 57.3;
     const auto negative_point = aimer.choose_aim_point(negative_target);
     if (!expect(
           negative_point.valid && negative_point.armor_id == 0,
-          "negative-spin outpost should keep the leaving plate through 40 degrees")) {
+          "negative-spin outpost should keep the leaving plate through 45 degrees")) {
       return 1;
     }
   }
@@ -683,6 +683,58 @@ int main()
     if (!expect(
           !make_fire_decision(-2.0, -45.5),
           "negative-spin outpost must stop after the mirrored leaving boundary")) {
+      return 1;
+    }
+  }
+
+  {
+    auto_aim::Shooter shooter(config_path);
+    auto_aim::Aimer aimer(config_path);
+    auto target = make_locked_outpost_target(now, 0.0, 2.0);
+    aimer.debug_aim_point.valid = true;
+    aimer.debug_aim_point.xyza = Eigen::Vector4d(2.0, 0.0, 1.0, 0.0);
+    std::list<auto_aim::Target> targets{target};
+    const io::Command command{true, false, 0.0, 0.0};
+    if (!expect(
+          !shooter.shoot(command, aimer, targets, Eigen::Vector3d::Zero(), false),
+          "outpost must not fire when tracker is not tracking")) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    auto visible_armor = make_world_armor(
+      auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost,
+      {2.0, 0.0, 1.0}, 0.0);
+    auto_aim::Target target(visible_armor, now, 0.2765, 3, P0_dig);
+    auto_aim::Shooter shooter(config_path);
+    auto_aim::Aimer aimer(config_path);
+    aimer.debug_aim_point.valid = true;
+    aimer.debug_aim_point.xyza = Eigen::Vector4d(2.0, 0.0, 1.0, 0.0);
+    std::list<auto_aim::Target> targets{target};
+    const io::Command command{true, false, 0.0, 0.0};
+    if (!expect(
+          !shooter.shoot(command, aimer, targets, Eigen::Vector3d::Zero(), true),
+          "outpost must not fire before layer lock")) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
+    auto armor = make_world_armor(
+      auto_aim::ArmorName::two, auto_aim::ArmorType::small, {2.0, 0.0, 1.0}, 0.0);
+    auto_aim::Target target(armor, now, 0.2, 4, P0_dig);
+    auto_aim::Shooter shooter(config_path);
+    auto_aim::Aimer aimer(config_path);
+    aimer.debug_aim_point.valid = true;
+    aimer.debug_aim_point.xyza = Eigen::Vector4d(2.0, 0.0, 1.0, 90.0 / 57.3);
+    std::list<auto_aim::Target> targets{target};
+    const io::Command command{true, false, 0.0, 0.0};
+    if (!expect(
+          shooter.shoot(command, aimer, targets, Eigen::Vector3d::Zero(), true),
+          "outpost phase window must not gate normal targets")) {
       return 1;
     }
   }
