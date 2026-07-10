@@ -703,6 +703,44 @@ int main()
   }
 
   {
+    auto target = make_locked_outpost_target(now, 0.0, 2.0);
+    std::list<auto_aim::Target> targets{target};
+    const io::Command centered_command{true, false, 0.0, 0.0};
+
+    auto_aim::Shooter invalid_aim_shooter(config_path);
+    auto_aim::Aimer invalid_aim_aimer(config_path);
+    invalid_aim_aimer.debug_aim_point.valid = false;
+    if (!expect(
+          !invalid_aim_shooter.shoot(
+            centered_command, invalid_aim_aimer, targets, Eigen::Vector3d::Zero(), true),
+          "outpost must not fire with an invalid aim point")) {
+      return 1;
+    }
+
+    auto_aim::Aimer valid_aimer(config_path);
+    valid_aimer.debug_aim_point.valid = true;
+    valid_aimer.debug_aim_point.xyza = Eigen::Vector4d(2.0, 0.0, 1.0, 0.0);
+
+    auto_aim::Shooter discontinuous_command_shooter(config_path);
+    const io::Command discontinuous_command{true, false, 20.0 / 57.3, 0.0};
+    if (!expect(
+          !discontinuous_command_shooter.shoot(
+            discontinuous_command, valid_aimer, targets, Eigen::Vector3d::Zero(), true),
+          "outpost must not fire after a discontinuous yaw command")) {
+      return 1;
+    }
+
+    auto_aim::Shooter gimbal_error_shooter(config_path);
+    const Eigen::Vector3d large_gimbal_error(20.0 / 57.3, 0.0, 0.0);
+    if (!expect(
+          !gimbal_error_shooter.shoot(
+            centered_command, valid_aimer, targets, large_gimbal_error, true),
+          "outpost must not fire with excessive gimbal yaw error")) {
+      return 1;
+    }
+  }
+
+  {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
     auto visible_armor = make_world_armor(
       auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost,
