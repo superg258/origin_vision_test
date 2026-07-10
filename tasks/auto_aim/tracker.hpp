@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <map>
+#include <vector>
 
 #include "armor.hpp"
 #include "solver.hpp"
@@ -61,6 +62,19 @@ private:
   ArmorPriority omni_target_priority_;
   std::map<ArmorName, ArmorPriority> armor_priority_;
 
+  struct OutpostLayerCorrectionDecision
+  {
+    int layer_id = -1;
+    bool defer_update = false;
+    bool corrected = false;
+  };
+
+  bool outpost_layer_correction_enabled_;
+  int outpost_layer_correction_frames_;
+  double outpost_layer_correction_z_gate_;
+  int outpost_layer_correction_candidate_ = -1;
+  int outpost_layer_correction_count_ = 0;
+
   void apply_priority(std::list<Armor> & armors) const;
 
   void sort_armors(std::list<Armor> & armors) const;
@@ -72,6 +86,11 @@ private:
   bool set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);
 
   bool update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);
+
+  OutpostLayerCorrectionDecision decide_outpost_layer_correction(
+    const Armor & armor, int raw_id,
+    const std::vector<Eigen::Vector4d> & predicted_armors);
+  void reset_outpost_layer_correction();
 };
 
 }  // namespace auto_aim

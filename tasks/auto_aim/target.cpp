@@ -455,6 +455,21 @@ void Target::set_outpost_association_debug(
   ekf_.data["assoc_reject_reason"] = reject_reason.empty() ? 0.0 : 1.0;
 }
 
+void Target::set_outpost_layer_correction_debug(
+  int raw_id, int height_id, double raw_z_residual, double best_z_residual,
+  double z_improvement, int count, bool pending, bool applied)
+{
+  if (!is_outpost_model()) return;
+  ekf_.data["outpost_layer_raw_id"] = static_cast<double>(raw_id);
+  ekf_.data["outpost_layer_height_id"] = static_cast<double>(height_id);
+  ekf_.data["outpost_layer_raw_z_residual"] = raw_z_residual;
+  ekf_.data["outpost_layer_best_z_residual"] = best_z_residual;
+  ekf_.data["outpost_layer_z_improvement"] = z_improvement;
+  ekf_.data["outpost_layer_correction_count"] = static_cast<double>(count);
+  ekf_.data["outpost_layer_correction_pending"] = pending ? 1.0 : 0.0;
+  ekf_.data["outpost_layer_correction_applied"] = applied ? 1.0 : 0.0;
+}
+
 std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 {
   if (is_outpost_model() && !outpost_layer_locked_) {

@@ -390,6 +390,104 @@ int main()
     auto_aim::Solver solver(config_path);
     solver.set_R_gimbal2world(Eigen::Quaterniond::Identity());
     auto_aim::Tracker tracker(config_path, solver);
+    tracker.target_ = make_locked_outpost_target(now, 0.0, 2.0);
+
+    const auto predicted = tracker.target_.armor_xyza_list();
+    auto observed_low = make_world_armor(
+      auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost,
+      predicted[0].head(3), predicted[0][3]);
+
+    const auto first =
+      tracker.decide_outpost_layer_correction(observed_low, 2, predicted);
+    const auto second =
+      tracker.decide_outpost_layer_correction(observed_low, 2, predicted);
+
+    if (!expect(first.defer_update && first.layer_id == 2, "first correction vote should defer")) {
+      return 1;
+    }
+    if (!expect(
+          second.defer_update && second.layer_id == 2,
+          "second correction vote should defer")) {
+      return 1;
+    }
+    if (!expect(
+          tracker.target_.ekf().data.at("outpost_layer_correction_pending") == 1.0,
+          "second vote should publish pending correction")) {
+      return 1;
+    }
+
+    const auto third =
+      tracker.decide_outpost_layer_correction(observed_low, 2, predicted);
+    if (!expect(
+          !third.defer_update && third.corrected && third.layer_id == 0,
+          "third correction vote should remap high to low")) {
+      return 1;
+    }
+    if (!expect(
+          tracker.target_.ekf().data.at("outpost_layer_correction_applied") == 1.0,
+          "third vote should publish applied correction")) {
+      return 1;
+    }
+
+    tracker.outpost_layer_correction_candidate_ = 0;
+    tracker.outpost_layer_correction_count_ = 2;
+    std::list<auto_aim::Armor> no_armors;
+    tracker.update_target(no_armors, now + std::chrono::milliseconds(60));
+    if (!expect(
+          tracker.outpost_layer_correction_count_ == 0,
+          "missing observation should reset correction confirmation")) {
+      return 1;
+    }
+  }
+
+  {
+    auto_aim::Solver solver(config_path);
+    solver.set_R_gimbal2world(Eigen::Quaterniond::Identity());
+    auto_aim::Tracker tracker(config_path, solver);
+    tracker.target_ = make_locked_outpost_target(now, 0.0, 2.0);
+    const auto predicted = tracker.target_.armor_xyza_list();
+
+    auto observed_low = make_world_armor(
+      auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost,
+      predicted[0].head(3), predicted[0][3]);
+    auto observed_middle = make_world_armor(
+      auto_aim::ArmorName::outpost, auto_aim::ArmorType::base_outpost,
+      predicted[1].head(3), predicted[1][3]);
+
+    tracker.decide_outpost_layer_correction(observed_low, 2, predicted);
+    tracker.decide_outpost_layer_correction(observed_middle, 2, predicted);
+    const auto restarted =
+      tracker.decide_outpost_layer_correction(observed_low, 2, predicted);
+    if (!expect(
+          restarted.defer_update && tracker.outpost_layer_correction_count_ == 1,
+          "alternating correction layers should restart confirmation")) {
+      return 1;
+    }
+
+    auto weak_conflict = observed_middle;
+    weak_conflict.xyz_in_world[2] = predicted[1][2] + 0.04;
+    const auto weak =
+      tracker.decide_outpost_layer_correction(weak_conflict, 2, predicted);
+    if (!expect(
+          !weak.defer_update && !weak.corrected && weak.layer_id == 2,
+          "weak z improvement should preserve raw layer")) {
+      return 1;
+    }
+
+    const auto agreed =
+      tracker.decide_outpost_layer_correction(observed_low, 0, predicted);
+    if (!expect(
+          !agreed.defer_update && !agreed.corrected && agreed.layer_id == 0 &&
+            tracker.outpost_layer_correction_count_ == 0,
+          "matching raw and height layers should update immediately")) {
+      return 1;
+    }
+  }
+
+  {
+    auto_aim::Solver solver(config_path);
+    solver.set_R_gimbal2world(Eigen::Quaterniond::Identity());
+    auto_aim::Tracker tracker(config_path, solver);
 
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
     const Eigen::Vector3d center_base(2.20, 0.10, 0.70);

@@ -48,6 +48,9 @@ public:
   void set_outpost_association_debug(
     int best_id, const std::array<double, 3> & scores, double best_score,
     const std::string & reject_reason);
+  void set_outpost_layer_correction_debug(
+    int raw_id, int height_id, double raw_z_residual, double best_z_residual,
+    double z_improvement, int count, bool pending, bool applied);
 
   bool diverged() const;
   bool convergened();

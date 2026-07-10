@@ -1037,6 +1037,18 @@ int main(int argc, char * argv[])
       if (ekf_data.count("outpost_phase_residual")) {
         data["outpost_phase_residual"] = ekf_data.at("outpost_phase_residual");
       }
+      constexpr const char * layer_correction_keys[] = {
+        "outpost_layer_raw_id",
+        "outpost_layer_height_id",
+        "outpost_layer_raw_z_residual",
+        "outpost_layer_best_z_residual",
+        "outpost_layer_z_improvement",
+        "outpost_layer_correction_count",
+        "outpost_layer_correction_pending",
+        "outpost_layer_correction_applied"};
+      for (const char * key : layer_correction_keys) {
+        if (ekf_data.count(key)) data[key] = ekf_data.at(key);
+      }
       if (target.name == auto_aim::ArmorName::outpost && aimer.debug_aim_point.valid) {
         const auto x = target.ekf_x();
         const double center_yaw = std::atan2(x[2], x[0]);
