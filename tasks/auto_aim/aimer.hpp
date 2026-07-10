@@ -41,8 +41,6 @@ private:
   double resistance_k_;
   double comming_angle_;
   double leaving_angle_;
-  double outpost_aim_coming_angle_;
-  double outpost_aim_leaving_angle_;
   double high_speed_delay_time_;
   double low_speed_delay_time_;
   double decision_speed_;

@@ -458,9 +458,8 @@ void Target::set_outpost_association_debug(
 std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 {
   if (is_outpost_model() && !outpost_layer_locked_) {
-    if (outpost_unlocked_prediction_ready()) return {predicted_unlocked_outpost_xyza()};
     if (!has_last_observed_armor_) return {};
-    return {last_observed_armor_xyza_};
+    return {predicted_unlocked_outpost_xyza()};
   }
 
   std::vector<Eigen::Vector4d> xyza_list;
