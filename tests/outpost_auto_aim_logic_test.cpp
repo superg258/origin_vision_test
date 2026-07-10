@@ -612,6 +612,28 @@ int main()
   }
 
   {
+    auto_aim::Aimer aimer(config_path);
+
+    auto positive_target = make_locked_outpost_target(now, 0.0, 2.0);
+    positive_target.ekf_.x[6] = 40.0 / 57.3;
+    const auto positive_point = aimer.choose_aim_point(positive_target);
+    if (!expect(
+          positive_point.valid && positive_point.armor_id == 0,
+          "positive-spin outpost should keep the leaving plate through 40 degrees")) {
+      return 1;
+    }
+
+    auto negative_target = make_locked_outpost_target(now, 0.0, -2.0);
+    negative_target.ekf_.x[6] = -40.0 / 57.3;
+    const auto negative_point = aimer.choose_aim_point(negative_target);
+    if (!expect(
+          negative_point.valid && negative_point.armor_id == 0,
+          "negative-spin outpost should keep the leaving plate through 40 degrees")) {
+      return 1;
+    }
+  }
+
+  {
     auto make_fire_decision = [&](double vyaw, double phase_deg) {
       auto_aim::Shooter shooter(config_path);
       auto_aim::Aimer aimer(config_path);
@@ -624,28 +646,43 @@ int main()
     };
 
     if (!expect(
-          make_fire_decision(2.0, -10.0),
-          "stable outpost mode should not reject fire solely by coming-side phase")) {
+          !make_fire_decision(2.0, -3.5),
+          "positive-spin outpost must not fire before the coming-side boundary")) {
       return 1;
     }
     if (!expect(
-          make_fire_decision(2.0, -2.0),
-          "outpost should fire when armor is near center on the coming side")) {
+          make_fire_decision(2.0, -3.0),
+          "positive-spin outpost should fire at the coming-side boundary")) {
       return 1;
     }
     if (!expect(
-          make_fire_decision(2.0, 10.0),
-          "outpost should fire after armor passes the center")) {
+          make_fire_decision(2.0, 45.0),
+          "positive-spin outpost should fire at the leaving-side boundary")) {
       return 1;
     }
     if (!expect(
-          make_fire_decision(2.0, 22.0),
-          "stable outpost mode should not reject fire solely by leaving-side phase")) {
+          !make_fire_decision(2.0, 45.5),
+          "positive-spin outpost must stop after the leaving-side boundary")) {
       return 1;
     }
     if (!expect(
-          make_fire_decision(-2.0, 10.0),
-          "stable outpost mode should not depend on spin direction phase window")) {
+          !make_fire_decision(-2.0, 3.5),
+          "negative-spin outpost must mirror the coming-side boundary")) {
+      return 1;
+    }
+    if (!expect(
+          make_fire_decision(-2.0, 3.0),
+          "negative-spin outpost should fire at the mirrored coming boundary")) {
+      return 1;
+    }
+    if (!expect(
+          make_fire_decision(-2.0, -45.0),
+          "negative-spin outpost should fire at the mirrored leaving boundary")) {
+      return 1;
+    }
+    if (!expect(
+          !make_fire_decision(-2.0, -45.5),
+          "negative-spin outpost must stop after the mirrored leaving boundary")) {
       return 1;
     }
   }

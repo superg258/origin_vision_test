@@ -93,7 +93,7 @@ pitch_offset: -1 # degree
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
-outpost_aim_leaving_angle: 30 # degree, keep target plate stable after it passes center
+outpost_aim_leaving_angle: 45 # degree, keep target plate stable after it passes center
 resistance_k: 0.023 # 空气阻力系数enemy_color: "red"
 #enemy_color: "blue"
 
@@ -189,7 +189,7 @@ pitch_offset: -0.2 # degree
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
-outpost_aim_leaving_angle: 30 # degree, keep target plate stable after it passes center
+outpost_aim_leaving_angle: 45 # degree, keep target plate stable after it passes center
 resistance_k: 0.023 # 空气阻力系数tt
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.063 # s
@@ -204,10 +204,8 @@ high_spin_force_fire_enabled: true
 high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
-outpost_fire_use_phase_window: false # stable outpost mode: do not gate fire by coming/leaving phase
-outpost_fire_max_angle: 18.0 # degree
 outpost_fire_coming_angle: 3.0 # degree, coming-side fire window before center
-outpost_fire_leaving_angle: 18.0 # degree, leaving-side fire window after center
+outpost_fire_leaving_angle: 45.0 # degree, leaving-side fire window after center
 
 #####-----decider参数-----#####
 mode: 1
