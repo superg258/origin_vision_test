@@ -33,6 +33,8 @@ private:
   YOLO11_BUFF MODE_;
   Track_status status_;
   int lose_;  // 丢失的次数
+  int stable_count_ = 0;
+  double stable_jump_threshold_ = 60.0;
   double lastlen_;
   std::optional<PowerRune> last_powerrune_ = std::nullopt;
 };

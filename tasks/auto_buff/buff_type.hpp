@@ -57,7 +57,6 @@ public:
   explicit PowerRune() = default;
 
   FanBlade & target() { return fanblades[0]; };
-  const FanBlade & target() const { return fanblades[0]; };
 
   bool is_unsolve() const { return unsolvable_; }
 

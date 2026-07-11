@@ -114,6 +114,24 @@ std::optional<PowerRune> Buff_Detector::detect_24(cv::Mat & bgr_img)
     return std::nullopt;
   }
 
+  if (last_powerrune_.has_value()) {
+    const auto current_target = powerrune.target().center;
+    const auto last_target = last_powerrune_->target().center;
+    const double jump = cv::norm(current_target - last_target);
+    if (jump > stable_jump_threshold_) {
+      stable_count_++;
+      if (stable_count_ < 3) {
+        tools::logger()->debug(
+          "[Buff_Detector] unstable target jump {:.1f}, keep last target", jump);
+        status_ = TRACK;
+        lose_ = 0;
+        return last_powerrune_;
+      }
+    } else {
+      stable_count_ = 0;
+    }
+  }
+
   status_ = TRACK;
   lose_ = 0;
   std::optional<PowerRune> P;
@@ -149,6 +167,24 @@ std::optional<PowerRune> Buff_Detector::detect(cv::Mat & bgr_img)
   if (powerrune.is_unsolve()) {
     handle_lose();
     return std::nullopt;
+  }
+
+  if (last_powerrune_.has_value()) {
+    const auto current_target = powerrune.target().center;
+    const auto last_target = last_powerrune_->target().center;
+    const double jump = cv::norm(current_target - last_target);
+    if (jump > stable_jump_threshold_) {
+      stable_count_++;
+      if (stable_count_ < 3) {
+        tools::logger()->debug(
+          "[Buff_Detector] unstable target jump {:.1f}, keep last target", jump);
+        status_ = TRACK;
+        lose_ = 0;
+        return last_powerrune_;
+      }
+    } else {
+      stable_count_ = 0;
+    }
   }
 
   status_ = TRACK;

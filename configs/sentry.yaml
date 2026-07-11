@@ -47,8 +47,8 @@ omni_fov_v_deg: 67.0
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
-exposure_ms: 4
-gain: 10
+exposure_ms: 2
+gain: 15
 vid_pid: "2bdf:0001"
 
 #####-----传统方法参数-----#####
@@ -61,7 +61,7 @@ min_armor_ratio: 1
 max_armor_ratio: 5
 max_side_ratio: 1.5
 max_rectangular_error: 25 # degree
-min_confidence: 0.8
+
 
 #####-----cboard参数-----#####
 quaternion_canid: 0x01
@@ -98,108 +98,10 @@ leaving_angle: 20 # degree
 outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
 outpost_aim_leaving_angle: 45 # degree, keep target plate stable after it passes center
 resistance_k: 0.023 # 空气阻力系数enemy_color: "red"
-#enemy_color: "blue"
-
-
-#####-----神经网络参数-----#####
-yolo_name: yolov5
-classify_model: assets/tiny_resnet.onnx
-yolo11_model_path: assets/yolo11.xml
-yolov8_model_path: assets/yolov8.xml
-yolov5_model_path: assets/yolov5_0526.xml
-device: GPU
-auto_aim_device: GPU
-omni_device: NPU
-min_confidence: 0.8
-use_traditional: true
-
-#####-----ROI-----#####
-roi: 
-  x: 420
-  y: 350
-  width: 600
-  height: 600
-
-use_roi: false
-
-#####-----USB相机参数-----###### 重投影误差: 0.1739px
-camera_matrix: [2339.127201181142, 0, 705.56398170031548, 0, 2341.8686418020352, 561.46505821300741, 0, 0, 1]
-distort_coeffs: [-0.096232219434074645, 0.51349007181343731, 0.00010651947016943067, 0.001099064742536348, 0]
-
-image_width: 1920
-image_height: 1080
-fov_h: 57.7 #87.7
-fov_v: 56.7 
-new_fov_h: 27 #67
-new_fov_v: 40.9
-usb_frame_rate: 50
-usb_exposure: 200 #1-80000______250
-usb_gamma: 160
-usb_gain: 20 #0-96
-usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
-omni_camera_read_timeout_ms: 10
-omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
-omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.2:1.0-video-index0"
-omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
-omni_left_yaw_deg: 60.0
-omni_right_yaw_deg: -60.0
-omni_back_yaw_deg: 180.0
-omni_fov_h_deg: 120.0
-omni_fov_v_deg: 67.0
-
-#####-----工业相机参数-----#####
-camera_name: "hikrobot"
-exposure_ms: 4
-gain: 10
-vid_pid: "2bdf:0001"
-
-#####-----传统方法参数-----#####
-threshold: 150
-max_angle_error: 45 # degree
-min_lightbar_ratio: 1.5
-max_lightbar_ratio: 20
-min_lightbar_length: 8
-min_armor_ratio: 1
-max_armor_ratio: 5
-max_side_ratio: 1.5
-max_rectangular_error: 25 # degree
-min_confidence: 0.8
-
-#####-----cboard参数-----#####
-quaternion_canid: 0x01
-bullet_speed_canid: 0x110
-send_canid: 0xff
-can_interface: "can0"
-
-#####-----时序参数-----#####
-timing:
-  offset: 0.002 # s, 图像时间戳到姿态查询的固定补偿
-
-#####-----ROS2云台桥参数-----#####
-ros2_gimbal:
-  node_name: "nav_gimbal_bridge"
-  status_topic: "/serial/gimbal_status"
-  cmd_topic: "/serial/process_gimbal"
-  # [[deprecated(cyclonedds)]] typed messages no longer need type name strings
-  # status_msg_type: "rm_interfaces/msg/Gimbal"
-  # cmd_msg_type: "rm_interfaces/msg/GimbalCmd"
-
-#####-----tracker参数-----#####
-min_detect_count: 5
-max_temp_lost_count: 25
-outpost_max_temp_lost_count: 75
-
-#####-----aimer参数-----#####
-yaw_offset: 0.75 # degree -2.5
-pitch_offset: -0.2 # degree 
-comming_angle: 60 # degree
-leaving_angle: 20 # degree
-outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
-outpost_aim_leaving_angle: 45 # degree, keep target plate stable after it passes center
-resistance_k: 0.023 # 空气阻力系数tt
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.063 # s
 low_speed_delay_time: 0.05 # s
+
 
 #####-----shooter参数-----#####
 first_tolerance: 5 # 近距离射击容差，degree
@@ -219,14 +121,6 @@ detect_interval: 2
 
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
-camera_name: "hikrobot"
-exposure_ms: 1.5
-gain: 15.0
-vid_pid: "2bdf:0001"
-
-timing:
-  offset: 0.002
-
 omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
 omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
 omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换
@@ -235,7 +129,7 @@ omni_command_timeout_s: 0.5 # omni目标命令若在该时间内未达到目标�
 main_lost_cmd_hold_s: 0.25 # 主相机tracker进入lost后，继续发送上一条主相机控制命令的持续时间
 
 #####-----工业相机标定参数-----#####
-R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
 
 # 相机同理想情况的偏角: yaw1 pitch0.8 roll0.48 degree
 R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
@@ -260,5 +154,5 @@ R_pitch: [1]
 model: "assets/yolo11_buff_int8.xml"
 
 #####-----buff_aimer参数-----#####
-fire_gap_time: 0.520 # s
-predict_time: 0.100 # s
+fire_gap_time: 0.4 # s
+predict_time: 0.23 # s

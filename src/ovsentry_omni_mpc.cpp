@@ -460,8 +460,10 @@ void draw_auto_aim_overlay(
 
 cv::Mat resize_for_view(const cv::Mat & img)
 {
+  // 按原图比例缩放到合适大小，避免压缩
   cv::Mat resized;
-  cv::resize(img, resized, {640, 360});
+  double scale = std::min(800.0 / img.cols, 600.0 / img.rows);
+  cv::resize(img, resized, {}, scale, scale);
   return resized;
 }
 }  // namespace
@@ -611,7 +613,11 @@ int main(int argc, char * argv[])
     solver.set_R_gimbal2world(q);
     buff_solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
-    const auto gimbal_mode = gimbal->mode();
+    auto gimbal_mode = gimbal->mode();
+    
+    // 强制使用小符模式（如果不是 buff 模式，则改为小符）
+   if (!is_buff_mode(gimbal_mode)) { gimbal_mode = io::small_buff;}
+    
     const bool buff_mode = is_buff_mode(gimbal_mode);
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
@@ -698,7 +704,9 @@ int main(int argc, char * argv[])
       const auto buff_detect_end = std::chrono::steady_clock::now();
 
       const auto buff_solve_start = std::chrono::steady_clock::now();
-      buff_solver.solve(buff_power_runes);
+      if (buff_power_runes.has_value()) {
+        buff_solver.solve(buff_power_runes);
+      }
       const auto buff_solve_end = std::chrono::steady_clock::now();
 
       const auto buff_aim_start = std::chrono::steady_clock::now();
