@@ -1,5 +1,5 @@
 camera_name: "mindvision"
-exposure_ms: 2
+exposure_ms: 1.5
 gamma: 0.5
 vid_pid: "f622:d13a"
 

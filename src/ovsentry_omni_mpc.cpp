@@ -478,7 +478,6 @@ const std::string keys =
   "{fov_h          | 120                     | USB相机水平视场角(deg) }"
   "{fov_v          | 67                      | USB相机垂直视场角(deg) }"
   "{no-display     |                         | 关闭画面显示 }";
-
 int main(int argc, char * argv[])
 {
   cv::CommandLineParser cli(argc, argv, keys);
@@ -608,7 +607,7 @@ int main(int argc, char * argv[])
 
     frame_count++;
     Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
-    recorder.record(main_img,q, main_timestamp);
+    //recorder.record(main_img,q, main_timestamp);
     solver.set_R_gimbal2world(q);
     buff_solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();

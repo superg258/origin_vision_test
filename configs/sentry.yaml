@@ -1,5 +1,5 @@
-#enemy_color: "red"
-enemy_color: "blue"
+enemy_color: "red"
+#enemy_color: "blue"
 
 
 #####-----神经网络参数-----#####
@@ -122,7 +122,10 @@ roi:
 
 use_roi: false
 
-#####-----USB相机参数-----#####
+#####-----USB相机参数-----###### 重投影误差: 0.1739px
+camera_matrix: [2339.127201181142, 0, 705.56398170031548, 0, 2341.8686418020352, 561.46505821300741, 0, 0, 1]
+distort_coeffs: [-0.096232219434074645, 0.51349007181343731, 0.00010651947016943067, 0.001099064742536348, 0]
+
 image_width: 1920
 image_height: 1080
 fov_h: 57.7 #87.7
@@ -207,7 +210,7 @@ high_spin_force_fire_enabled: true
 high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
-outpost_fire_coming_angle: 3.0 # degree, coming-side fire window before center
+outpost_fire_coming_angle: 30.0 # degree, coming-side fire window before center
 outpost_fire_leaving_angle: 45.0 # degree, leaving-side fire window after center
 
 #####-----decider参数-----#####
@@ -238,9 +241,9 @@ R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
 t_camera2gimbal: [0.081834836810026332, 0.0038077150929364738, 0.087564665738670097]
 
-# 重投影误差: 0.1739px
-camera_matrix: [2339.127201181142, 0, 705.56398170031548, 0, 2341.8686418020352, 561.46505821300741, 0, 0, 1]
-distort_coeffs: [-0.096232219434074645, 0.51349007181343731, 0.00010651947016943067, 0.001099064742536348, 0]
+# 重投影误差: 0.0880px
+camera_matrix: [2392.7002715785816, 0, 703.95329780475095, 0, 2392.1064206907113, 551.23534841836909, 0, 0, 1]
+distort_coeffs: [-0.070281213351805649, 0.3722108258423531, -0.0003091735287484376, -0.00047455916552131253, 0]
 
 #####-----planner-----#####
 fire_thresh: 0.0035
