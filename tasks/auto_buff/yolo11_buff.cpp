@@ -8,6 +8,11 @@ YOLO11_BUFF::YOLO11_BUFF(const std::string & config)
 {
   auto yaml = YAML::LoadFile(config);
   std::string model_path = yaml["model"].as<std::string>();
+  const std::string enemy_color = yaml["enemy_color"].as<std::string>("");
+  red_as_blue_ = enemy_color == "red";
+  if (red_as_blue_) {
+    tools::logger()->info("[YOLO11_BUFF] red buff input is converted to blue-style input.");
+  }
   model = core.read_model(model_path);
   // printInputAndOutputsInfo(*model);  // 打印模型信息
   /// 载入并编译模型
@@ -32,20 +37,25 @@ std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_multicandidateboxes(cv::Mat & 
     return std::vector<YOLO11_BUFF::Object> ();
   }
 
-  cv::Mat bgr_img = image;
+  cv::Mat red_as_blue_img;
+  const cv::Mat * bgr_img = &image;
+  if (red_as_blue_) {
+    cv::cvtColor(image, red_as_blue_img, cv::COLOR_BGR2RGB);
+    bgr_img = &red_as_blue_img;
+  }
 
-  auto x_scale = static_cast<double>(640) / bgr_img.rows;
-  auto y_scale = static_cast<double>(640) / bgr_img.cols;
+  auto x_scale = static_cast<double>(640) / bgr_img->rows;
+  auto y_scale = static_cast<double>(640) / bgr_img->cols;
   auto scale = std::min(x_scale, y_scale);
-  auto h = static_cast<int>(bgr_img.rows * scale);
-  auto w = static_cast<int>(bgr_img.cols * scale);
+  auto h = static_cast<int>(bgr_img->rows * scale);
+  auto w = static_cast<int>(bgr_img->cols * scale);
 
   double factor = scale;  
 
   // preproces
   auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
   auto roi = cv::Rect(0, 0, w, h);
-  cv::resize(bgr_img, input(roi), {w, h});
+  cv::resize(*bgr_img, input(roi), {w, h});
   ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
 
   /// 执行推理计算
@@ -149,7 +159,14 @@ std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_onecandidatebox(cv::Mat & imag
   const int64 start = cv::getTickCount();  // 设置模型输入
 
   /// 预处理
-  const float factor = fill_tensor_data_image(input_tensor, image);  // 填充图片到合适的input size
+  cv::Mat red_as_blue_img;
+  const cv::Mat * model_img = &image;
+  if (red_as_blue_) {
+    cv::cvtColor(image, red_as_blue_img, cv::COLOR_BGR2RGB);
+    model_img = &red_as_blue_img;
+  }
+  const float factor =
+    fill_tensor_data_image(input_tensor, *model_img);  // 填充图片到合适的input size
 
   /// 执行推理计算
 
