@@ -93,6 +93,8 @@ Q_pitch: [9e6, 0]
 R_pitch: [1]
 
 #####-----打符参数-----#####
-model: "assets/yolo11_buff_int8.xml"
+ConfidenceThreshold: 0.2
+IouThreshold: 0.2
+model: "assets/buff_repvgg.xml"
 fire_gap_time: 0.520 # s
 predict_time: 0.100 # s

@@ -42,6 +42,9 @@ public:
   cv::Point2f r_center;
   std::vector<FanBlade> fanblades;  // 按target开始顺时针
 
+  int slot_id = -1;
+  double slot_angle = 0.0;
+
   int light_num;
 
   Eigen::Vector3d xyz_in_world;  // 单位：m

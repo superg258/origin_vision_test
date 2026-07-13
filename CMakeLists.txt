@@ -144,6 +144,9 @@ target_link_libraries(pattern_geometry_test ${OpenCV_LIBS})
 add_executable(armor_type_logic_test tests/armor_type_logic_test.cpp)
 target_link_libraries(armor_type_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
+add_executable(buff_model_integration_test tests/buff_model_integration_test.cpp)
+target_link_libraries(buff_model_integration_test yaml-cpp)
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/local/local_tests.cmake OPTIONAL)
 
 # 只有在 io 子目录成功生成对应的可选 ROS2 库时，才编译相关入口。
