@@ -1,11 +1,13 @@
 #include "ros2_gimbal.hpp"
 
-#include <fastcdr/Cdr.h>
-#include <fastcdr/FastBuffer.h>
+// [[deprecated(cyclonedds)]] Fast CDR manual serialization no longer needed
+// #include <fastcdr/Cdr.h>
+// #include <fastcdr/FastBuffer.h>
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
+// [[deprecated(cyclonedds)]]
+// #include <cstring>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -45,6 +47,8 @@ bool is_valid_quaternion(const Eigen::Quaterniond & q)
   return std::isfinite(norm) && std::abs(norm - 1.0) < 1e-2;
 }
 
+// [[deprecated(cyclonedds)]] typed messages replace generic type candidates
+/*
 std::vector<std::pair<std::string, std::string>> build_type_candidates(
   const std::string & status_msg_type, const std::string & cmd_msg_type)
 {
@@ -63,7 +67,10 @@ std::vector<std::pair<std::string, std::string>> build_type_candidates(
 
   return candidates;
 }
+*/
 
+// [[deprecated(cyclonedds)]] manual Fast CDR deserialization replaced by typed message fields
+/*
 void deserialize_gimbal_status(
   const rclcpp::SerializedMessage & serialized_message, double & pitch_deg, double & roll_deg,
   double & yaw_deg, uint8_t & mode, Eigen::Quaterniond & q, double & yaw_vel_deg,
@@ -111,7 +118,10 @@ void deserialize_gimbal_status(
   bullet_speed = bullet_speed_raw;
   big_yaw_deg = big_yaw;
 }
+*/
 
+// [[deprecated(cyclonedds)]] manual Fast CDR serialization replaced by typed message construction
+/*
 rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
   bool control, bool fire, double big_yaw_rad, double small_yaw_rad, double pitch_rad,
   double yaw_vel_rad, double pitch_vel_rad, double yaw_acc_rad, double pitch_acc_rad,
@@ -167,6 +177,41 @@ rclcpp::SerializedMessage serialize_gimbal_cmd(
     command.control, command.shoot, big_yaw_rad, small_yaw_rad, command.pitch, 0.0, 0.0, 0.0,
     0.0, 0, 0.0, 0.0, 0.0); // 默认 ID=0, 速度=0
 }
+*/
+
+// [[cyclonedds]] typed message constructor for GimbalCmd
+rm_interfaces::msg::GimbalCmd build_gimbal_cmd(
+  bool control, bool fire, double big_yaw_rad, double small_yaw_rad, double pitch_rad,
+  double yaw_vel_rad, double pitch_vel_rad, double yaw_acc_rad, double pitch_acc_rad,
+  uint8_t armor_id, double vx, double vy, double distance)
+{
+  rm_interfaces::msg::GimbalCmd msg;
+  const auto now_ns = rclcpp::Clock(RCL_SYSTEM_TIME).now().nanoseconds();
+  msg.header.stamp.sec = static_cast<int32_t>(now_ns / 1000000000LL);
+  msg.header.stamp.nanosec = static_cast<uint32_t>(now_ns % 1000000000LL);
+  msg.header.frame_id = "";
+  msg.enemy_id = armor_id;
+  msg.vx = vx;
+  msg.vy = vy;
+  msg.fire_advice = control && fire;
+  msg.big_yaw = control ? rad2deg(big_yaw_rad) : 0.0;
+  msg.small_yaw = control ? rad2deg(small_yaw_rad) : 0.0;
+  msg.pitch = control ? rad2deg(-pitch_rad) : 0.0;
+  msg.yaw_vel_deg = control ? rad2deg(yaw_vel_rad) : 0.0;
+  msg.pitch_vel_deg = control ? rad2deg(-pitch_vel_rad) : 0.0;
+  msg.yaw_acc_deg = control ? rad2deg(yaw_acc_rad) : 0.0;
+  msg.pitch_acc_deg = control ? rad2deg(-pitch_acc_rad) : 0.0;
+  msg.target_distance = distance;
+  return msg;
+}
+
+rm_interfaces::msg::GimbalCmd build_gimbal_cmd_from_command(
+  const io::Command & command, double big_yaw_rad, double small_yaw_rad)
+{
+  return build_gimbal_cmd(
+    command.control, command.shoot, big_yaw_rad, small_yaw_rad, command.pitch, 0.0, 0.0, 0.0,
+    0.0, 0, 0.0, 0.0, 0.0);
+}
 }  // namespace
 
 void ROS2Gimbal::send_mpc(
@@ -176,7 +221,8 @@ void ROS2Gimbal::send_mpc(
 {
   if (!cmd_publisher_) return;
   try {
-    auto message = serialize_gimbal_mpc_cmd(
+    // [[cyclonedds]] typed message publish replaces old Fast CDR serialization
+    auto message = build_gimbal_cmd(
       control, fire, big_yaw, small_yaw, pitch, yaw_vel, pitch_vel, yaw_acc, pitch_acc,
       armor_id, vx, vy, distance);
     cmd_publisher_->publish(message);
@@ -241,13 +287,16 @@ ROS2Gimbal::BridgeConfig ROS2Gimbal::load_bridge_config(const std::string & conf
   if (bridge["node_name"]) config.node_name = bridge["node_name"].as<std::string>();
   if (bridge["status_topic"]) config.status_topic = bridge["status_topic"].as<std::string>();
   if (bridge["cmd_topic"]) config.cmd_topic = bridge["cmd_topic"].as<std::string>();
-  if (bridge["status_msg_type"]) config.status_msg_type = bridge["status_msg_type"].as<std::string>();
-  if (bridge["cmd_msg_type"]) config.cmd_msg_type = bridge["cmd_msg_type"].as<std::string>();
+  // [[deprecated(cyclonedds)]] typed messages no longer need type name strings
+  // if (bridge["status_msg_type"]) config.status_msg_type = bridge["status_msg_type"].as<std::string>();
+  // if (bridge["cmd_msg_type"]) config.cmd_msg_type = bridge["cmd_msg_type"].as<std::string>();
   return config;
 }
 
 void ROS2Gimbal::configure_topics()
 {
+  // [[deprecated(cyclonedds)]] old generic publisher/subscription with type candidates
+  /*
   const auto candidates =
     build_type_candidates(bridge_config_.status_msg_type, bridge_config_.cmd_msg_type);
   if (candidates.empty()) {
@@ -284,11 +333,27 @@ void ROS2Gimbal::configure_topics()
     errors +
     "Please set ros2_gimbal.status_msg_type and ros2_gimbal.cmd_msg_type to the actual interface "
     "package, for example rm_interfaces/msg/Gimbal.");
+  */
+
+  // [[cyclonedds]] typed publisher/subscription (no manual Fast CDR needed)
+  cmd_publisher_ =
+    node_->create_publisher<rm_interfaces::msg::GimbalCmd>(
+      bridge_config_.cmd_topic, rclcpp::SensorDataQoS());
+  status_subscription_ =
+    node_->create_subscription<rm_interfaces::msg::Gimbal>(
+      bridge_config_.status_topic, rclcpp::SensorDataQoS(),
+      [this](const rm_interfaces::msg::Gimbal::SharedPtr msg) {
+        this->status_callback(msg);
+      });
+  tools::logger()->info(
+    "[ROS2Gimbal] Typed pub/sub on '{}' and '{}'.", bridge_config_.cmd_topic, bridge_config_.status_topic);
 }
 
-void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage> & message)
+void ROS2Gimbal::status_callback(const rm_interfaces::msg::Gimbal::SharedPtr msg)
 {
   try {
+    // [[deprecated(cyclonedds)]] old manual Fast CDR deserialization
+    /*
     double pitch_deg = 0.0;
     double roll_deg = 0.0;
     double yaw_deg = 0.0;
@@ -302,6 +367,19 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
     deserialize_gimbal_status(
       *message, pitch_deg, roll_deg, yaw_deg, mode_raw, q, yaw_vel_deg, pitch_vel_deg,
       bullet_speed, big_yaw_deg);
+    */
+
+    // [[cyclonedds]] read fields directly from typed message
+    const double pitch_deg = msg->pitch;
+    const double roll_deg = msg->roll;
+    const double yaw_deg = msg->yaw;
+    const double big_yaw_deg = msg->big_yaw;
+    const uint8_t mode_raw = msg->mode;
+    const double yaw_vel_deg = msg->small_yaw_speed;
+    const double pitch_vel_deg = msg->pitch_speed;
+    const double bullet_speed = msg->bullet_speed;
+
+    Eigen::Quaterniond q(msg->w, msg->x, msg->y, msg->z);
 
     if (!is_valid_quaternion(q)) {
       q = quaternion_from_deg_euler(yaw_deg, pitch_deg, roll_deg);
@@ -450,7 +528,8 @@ void ROS2Gimbal::send(const io::Command & command, double big_yaw, double small_
   if (!cmd_publisher_) return;
 
   try {
-    auto message = serialize_gimbal_cmd(command, big_yaw, small_yaw);
+    // [[cyclonedds]] typed message publish replaces old Fast CDR serialization
+    auto message = build_gimbal_cmd_from_command(command, big_yaw, small_yaw);
     cmd_publisher_->publish(message);
   } catch (const std::exception & e) {
     tools::logger()->warn("[ROS2Gimbal] Failed to publish gimbal cmd: {}", e.what());

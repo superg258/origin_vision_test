@@ -570,6 +570,12 @@ int main(int argc, char * argv[])
     Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
     solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
+    auto gimbal_mode = gimbal->mode();
+    
+    // 强制使用小符模式（如果不是 buff 模式，则改为小符）
+  // if (!is_buff_mode(gimbal_mode)) { gimbal_mode = io::small_buff;}
+    
+ //  const bool buff_mode = is_buff_mode(gimbal_mode);
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto t0 = std::chrono::steady_clock::now();

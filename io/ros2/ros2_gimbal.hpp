@@ -15,6 +15,10 @@
 #include "rclcpp/rclcpp.hpp"
 #include "tools/thread_safe_queue.hpp"
 
+// [[cyclonedds]] typed message headers (replaces manual Fast CDR serialization)
+#include "rm_interfaces/msg/gimbal.hpp"
+#include "rm_interfaces/msg/gimbal_cmd.hpp"
+
 namespace io
 {
 struct ROS2GimbalState
@@ -64,13 +68,15 @@ private:
     std::string node_name = "nav_gimbal_bridge";
     std::string status_topic = "/serial/gimbal_status";
     std::string cmd_topic = "/serial/process_gimbal";
-    std::string status_msg_type;
-    std::string cmd_msg_type;
+    // [[deprecated(cyclonedds)]] no longer needed with typed messages
+    // std::string status_msg_type;
+    // std::string cmd_msg_type;
   };
 
   BridgeConfig load_bridge_config(const std::string & config_path);
   void configure_topics();
-  void status_callback(const std::shared_ptr<rclcpp::SerializedMessage> & message);
+  // [[deprecated(cyclonedds)]] void status_callback(const std::shared_ptr<rclcpp::SerializedMessage> & message);
+  void status_callback(const rm_interfaces::msg::Gimbal::SharedPtr msg);
   bool prime_queue_if_ready();
   Eigen::Quaterniond latest_q() const;
   double latest_big_yaw() const;
@@ -78,8 +84,12 @@ private:
 
   tools::ThreadSafeQueue<IMUData> queue_{1000};
   std::shared_ptr<rclcpp::Node> node_;
-  std::shared_ptr<rclcpp::GenericPublisher> cmd_publisher_;
-  std::shared_ptr<rclcpp::GenericSubscription> status_subscription_;
+  // [[deprecated(cyclonedds)]] old generic publisher (required Fast CDR)
+  // std::shared_ptr<rclcpp::GenericPublisher> cmd_publisher_;
+  std::shared_ptr<rclcpp::Publisher<rm_interfaces::msg::GimbalCmd>> cmd_publisher_;
+  // [[deprecated(cyclonedds)]] old generic subscription (required Fast CDR)
+  // std::shared_ptr<rclcpp::GenericSubscription> status_subscription_;
+  std::shared_ptr<rclcpp::Subscription<rm_interfaces::msg::Gimbal>> status_subscription_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
   std::thread spin_thread_;
 
