@@ -105,7 +105,7 @@ t_camera2gimbal: [-0.034955523715399906, -0.000074403211899371, 0.00124817391010
 
 
 #####-----buff_detector参数-----#####
-model: "assets/yolo11_buff_int8.xml"
+model: "assets/buff_repvgg.xml"
 
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.600   # s

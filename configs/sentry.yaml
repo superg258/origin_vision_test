@@ -151,7 +151,9 @@ Q_pitch: [9e6, 0]
 R_pitch: [1]
 
 #####-----buff_detector参数-----#####
-model: "assets/yolo11_buff_int8.xml"
+ConfidenceThreshold: 0.5
+IouThreshold: 0.2
+model: "assets/buff_repvgg.xml"
 
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.4 # s

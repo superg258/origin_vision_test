@@ -85,7 +85,7 @@ can_interface: "can0"
 com_port: "/dev/gimbal"
 
 #####-----buff_detector参数-----#####
-model: "assets/yolo11_buff_int8.xml"
+model: "assets/buff_repvgg.xml"
 
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.520   # s

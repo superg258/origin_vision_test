@@ -28,6 +28,11 @@
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
+#include "tasks/auto_buff/buff_aimer.hpp"
+#include "tasks/auto_buff/buff_detector.hpp"
+#include "tasks/auto_buff/buff_solver.hpp"
+#include "tasks/auto_buff/buff_target.hpp"
+#include "tasks/auto_buff/buff_type.hpp"
 #include "tasks/omniperception/decider.hpp"
 #include "tasks/omniperception/ovsentry_omni_logic.hpp"
 #include "tools/exiter.hpp"
@@ -64,6 +69,14 @@ struct OmniCandidateFrame
   bool has_base_big_yaw = false;
   std::optional<omniperception::OmniCandidate> candidate;
 };
+
+io::GimbalState make_buff_gimbal_state(const io::ROS2GimbalState & state)
+{
+  return {
+    static_cast<float>(state.yaw), static_cast<float>(state.yaw_vel),
+    static_cast<float>(state.pitch), static_cast<float>(state.pitch_vel),
+    static_cast<float>(state.bullet_speed), 0};
+}
 
 std::string normalize_dev_name(const std::string & dev)
 {
@@ -425,6 +438,36 @@ void draw_auto_aim_overlay(
   tools::draw_points(img, aim_image_points, aim_point.valid ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0));
 }
 
+void draw_small_buff_overlay(
+  cv::Mat & img, std::optional<auto_buff::PowerRune> & power_rune,
+  const auto_buff::SmallTarget & target, const auto_buff::Solver & solver,
+  const auto_aim::Plan & plan)
+{
+  tools::draw_text(img, "SMALL_BUFF", {10, 30}, {0, 255, 255}, 0.8, 2);
+  tools::draw_text(
+    img,
+    fmt::format(
+      "buff yaw={:.2f} pitch={:.2f} fire={}", plan.yaw * 57.3, plan.pitch * 57.3,
+      plan.fire ? 1 : 0),
+    {10, 60}, {0, 255, 255}, 0.8, 2);
+
+  if (!power_rune.has_value()) {
+    tools::draw_text(img, "no buff", {10, 90}, {120, 120, 120}, 0.8, 2);
+    return;
+  }
+
+  auto & rune = power_rune.value();
+  tools::draw_points(img, rune.target().points, {0, 255, 0}, 2);
+  tools::draw_point(img, rune.target().center, {0, 0, 255}, 4);
+  tools::draw_point(img, rune.r_center, {255, 0, 255}, 4);
+
+  if (target.is_unsolve()) return;
+  const auto image_points =
+    solver.reproject_buff(target.point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.0)),
+                          target.ekf_x()[4], target.ekf_x()[5]);
+  tools::draw_points(img, image_points, {255, 0, 0}, 2);
+}
+
 cv::Mat resize_for_view(const cv::Mat & img)
 {
   cv::Mat resized;
@@ -532,6 +575,10 @@ int main(int argc, char * argv[])
   auto_aim::Shooter shooter(config_path);
   auto_aim::Planner planner(config_path);
   omniperception::Decider decider(config_path);
+  auto_buff::Buff_Detector buff_detector(config_path);
+  auto_buff::Solver buff_solver(config_path);
+  auto_buff::SmallTarget buff_small_target;
+  auto_buff::Aimer buff_aimer(config_path);
   constexpr bool aimer_to_now = true;
 
   auto yolo_omni_left = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
@@ -571,6 +618,9 @@ int main(int argc, char * argv[])
     solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
     auto gimbal_mode = gimbal->mode();
+    // Debug only: force small buff mode. Comment this line to use the gimbal-reported mode.
+    gimbal_mode = io::small_buff;
+    const bool small_buff_mode = gimbal_mode == io::small_buff;
     
     // 强制使用小符模式（如果不是 buff 模式，则改为小符）
   // if (!is_buff_mode(gimbal_mode)) { gimbal_mode = io::small_buff;}
@@ -579,15 +629,20 @@ int main(int argc, char * argv[])
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto t0 = std::chrono::steady_clock::now();
-    auto armors = yolo_auto.detect(main_img, frame_count);
-    auto t1 = std::chrono::steady_clock::now();
     const auto armor_target_mask = read_nav_armor_target_mask(armor_ignore_subscriber);
-    decider.armor_filter(armors);
-    decider.set_priority(armors);
-    apply_armor_target_mask(armors, armor_target_mask);
-    auto targets = tracker.track(armors, main_timestamp);
-    const std::string tracker_state = tracker.state();
-    const bool omni_mode = tracker_state == "lost";
+    std::list<auto_aim::Armor> armors;
+    std::list<auto_aim::Target> targets;
+    std::string tracker_state = small_buff_mode ? "small_buff" : "idle";
+    if (!small_buff_mode) {
+      armors = yolo_auto.detect(main_img, frame_count);
+      decider.armor_filter(armors);
+      decider.set_priority(armors);
+      apply_armor_target_mask(armors, armor_target_mask);
+      targets = tracker.track(armors, main_timestamp);
+      tracker_state = tracker.state();
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    const bool omni_mode = !small_buff_mode && tracker_state == "lost";
 
     std::optional<OmniInferenceResult> best_omni_result;
     std::optional<double> omni_target_abs_yaw_deg;
@@ -611,6 +666,10 @@ int main(int argc, char * argv[])
     double omni_retarget_remaining_ms = 0.0;
     const auto now = std::chrono::steady_clock::now();
     io::Command command{false, false, 0.0, 0.0};
+    std::optional<auto_buff::PowerRune> buff_power_rune;
+    auto_aim::Plan buff_plan{false, false, 0, 0, 0, 0, 0, 0, 0, 0};
+    double buff_detect_ms = 0.0;
+    bool buff_target_ready = false;
 
     auto clear_omni_timeout_session = [&]() {
         active_omni_timeout_target.reset();
@@ -637,7 +696,38 @@ int main(int argc, char * argv[])
       clear_omni_redirect_state();
     }
 
-    if (omni_mode) {
+    if (small_buff_mode) {
+      left_img.release();
+      right_img.release();
+      back_img.release();
+      clear_omni_redirect_state();
+
+      buff_solver.set_R_gimbal2world(q);
+      const auto t_buff0 = std::chrono::steady_clock::now();
+      buff_power_rune = buff_detector.detect(main_img);
+      const auto t_buff1 = std::chrono::steady_clock::now();
+      buff_detect_ms = tools::delta_time(t_buff1, t_buff0) * 1e3;
+      buff_solver.solve(buff_power_rune);
+      buff_small_target.get_target(buff_power_rune, main_timestamp);
+      buff_target_ready = !buff_small_target.is_unsolve();
+
+      auto buff_target_copy = buff_small_target;
+      buff_plan =
+        buff_aimer.mpc_aim(buff_target_copy, main_timestamp, make_buff_gimbal_state(gimbal_state), true);
+
+      command.control = buff_plan.control;
+      command.shoot = buff_plan.fire;
+      command.yaw = tools::limit_rad(buff_plan.yaw);
+      command.pitch = buff_plan.pitch;
+      command.big_yaw = nearest_continuous_yaw_rad(command.yaw, gimbal_state.big_yaw);
+      command.small_yaw = command.yaw;
+      command.has_target_yaw = command.control;
+
+      gimbal->send_mpc(
+        buff_plan.control, buff_plan.fire, command.big_yaw, command.small_yaw, buff_plan.pitch,
+        buff_plan.yaw_vel, buff_plan.pitch_vel, buff_plan.yaw_acc, buff_plan.pitch_acc, 0, 0.0,
+        0.0, 0.0);
+    } else if (omni_mode) {
       auto read_omni_frame = [&](io::USBCamera & camera, cv::Mat & img,
                                  std::chrono::steady_clock::time_point & ts,
                                  const OmniCamConfig & cam_cfg) {
@@ -854,7 +944,8 @@ int main(int argc, char * argv[])
     }
 
     nlohmann::json data;
-    data["mode"] = omni_mode ? 1 : 0;
+    data["mode"] = small_buff_mode ? 2 : (omni_mode ? 1 : 0);
+    data["gimbal_mode"] = io::MODES[static_cast<int>(gimbal_mode)];
     data["armor_num"] = armors.size();
     data["tracker_state"] = tracker_state;
     data["gimbal_yaw"] = ypr[0] * 57.3;
@@ -869,8 +960,29 @@ int main(int argc, char * argv[])
     data["target_vx"] = command.vx;
     data["target_vy"] = command.vy;
     data["horizon_distance"] = command.horizon_distance;
-    data["aim_source"] = (!omni_mode && command.control) ? aimer.debug_aim_point.source : -1;
-    data["aim_armor_id"] = (!omni_mode && command.control) ? aimer.debug_aim_point.armor_id : -1;
+    data["aim_source"] = (!small_buff_mode && !omni_mode && command.control) ? aimer.debug_aim_point.source : -1;
+    data["aim_armor_id"] =
+      (!small_buff_mode && !omni_mode && command.control) ? aimer.debug_aim_point.armor_id : -1;
+    if (small_buff_mode) {
+      data["buff_detected"] = buff_power_rune.has_value() ? 1 : 0;
+      data["buff_target_ready"] = buff_target_ready ? 1 : 0;
+      data["buff_detect_ms"] = buff_detect_ms;
+      data["buff_yaw"] = buff_plan.yaw * 57.3;
+      data["buff_pitch"] = buff_plan.pitch * 57.3;
+      data["buff_yaw_vel"] = buff_plan.yaw_vel * 57.3;
+      data["buff_pitch_vel"] = buff_plan.pitch_vel * 57.3;
+      if (buff_power_rune.has_value()) {
+        data["buff_r_yaw"] = buff_power_rune->ypd_in_world[0] * 57.3;
+        data["buff_r_pitch"] = buff_power_rune->ypd_in_world[1] * 57.3;
+        data["buff_r_distance"] = buff_power_rune->ypd_in_world[2];
+        data["buff_roll"] = buff_power_rune->ypr_in_world[2] * 57.3;
+      }
+      if (buff_target_ready) {
+        const auto x = buff_small_target.ekf_x();
+        data["buff_target_roll"] = x[5] * 57.3;
+        data["buff_target_spd"] = x[6] * 57.3;
+      }
+    }
     if (!targets.empty()) {
       const auto & target = targets.front();
       data["target_name"] = auto_aim::ARMOR_NAMES[target.name];
@@ -920,14 +1032,18 @@ int main(int argc, char * argv[])
     prev_omni_mode = omni_mode;
     if (!display) continue;
 
-    draw_auto_aim_overlay(main_img, targets, aimer, solver);
-    tools::draw_text(main_img, fmt::format("[{}] mode={}", tracker_state, omni_mode ? "OMNI" : "MPC"),
-      {10, 30}, {255, 255, 255}, 0.8, 2);
-    tools::draw_text(main_img,
-      fmt::format("mpc yaw={:.2f} pitch={:.2f} fire={}",
-        (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3,
-        command.pitch * 57.3, command.shoot ? 1 : 0),
-      {10, 60}, {154, 50, 205}, 0.8, 2);
+    if (small_buff_mode) {
+      draw_small_buff_overlay(main_img, buff_power_rune, buff_small_target, buff_solver, buff_plan);
+    } else {
+      draw_auto_aim_overlay(main_img, targets, aimer, solver);
+      tools::draw_text(main_img, fmt::format("[{}] mode={}", tracker_state, omni_mode ? "OMNI" : "MPC"),
+        {10, 30}, {255, 255, 255}, 0.8, 2);
+      tools::draw_text(main_img,
+        fmt::format("mpc yaw={:.2f} pitch={:.2f} fire={}",
+          (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3,
+          command.pitch * 57.3, command.shoot ? 1 : 0),
+        {10, 60}, {154, 50, 205}, 0.8, 2);
+    }
     if (omni_target_abs_yaw_deg.has_value()) {
       tools::draw_text(main_img, fmt::format("omni target yaw={:.2f}", omni_target_abs_yaw_deg.value()),
         {10, 90}, {0, 255, 255}, 0.8, 2);
