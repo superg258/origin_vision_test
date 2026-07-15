@@ -27,6 +27,7 @@ use_roi: false
 image_width: 1920
 image_height: 1080
 camera_image_rotation_deg: 180 # Set 180 when the image sent to detection/PnP is rotated 180 deg.
+main_camera_rotate_before_detection_deg: 0 # Set 180 only when Camera returns raw upside-down image.
 fov_h: 57.7 #87.7
 fov_v: 56.7 
 new_fov_h: 27 #67
@@ -116,6 +117,7 @@ outpost_fire_max_angle: 18.0 # degree
 
 #####-----decider参数-----#####
 mode: 1
+main_tracking_big_yaw_mode: "hold_current" # hold_current: main camera only drives small yaw; target_center: old big-yaw follow.
 omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
 omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
 omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换

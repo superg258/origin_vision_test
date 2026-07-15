@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -94,9 +95,59 @@ std::string slot_name(omniperception::OmniCameraSlot slot)
 
 bool is_buff_mode(io::Mode mode) { return mode == io::small_buff || mode == io::big_buff; }
 
-void rotate_main_camera_image(cv::Mat & img)
+enum class MainTrackingBigYawMode
 {
-  cv::rotate(img, img, cv::ROTATE_180);
+  hold_current,
+  target_center
+};
+
+MainTrackingBigYawMode read_main_tracking_big_yaw_mode(const YAML::Node & yaml)
+{
+  const std::string mode =
+    yaml["main_tracking_big_yaw_mode"] ? yaml["main_tracking_big_yaw_mode"].as<std::string>()
+                                      : "hold_current";
+  if (mode == "target_center" || mode == "target") {
+    return MainTrackingBigYawMode::target_center;
+  }
+  return MainTrackingBigYawMode::hold_current;
+}
+
+const char * main_tracking_big_yaw_mode_name(MainTrackingBigYawMode mode)
+{
+  switch (mode) {
+    case MainTrackingBigYawMode::target_center:
+      return "target_center";
+    case MainTrackingBigYawMode::hold_current:
+      return "hold_current";
+  }
+  return "hold_current";
+}
+
+int normalized_image_rotation_deg(int deg)
+{
+  deg %= 360;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
+int read_main_camera_rotate_before_detection_deg(const YAML::Node & yaml)
+{
+  const int rotation_deg = normalized_image_rotation_deg(
+    yaml["main_camera_rotate_before_detection_deg"]
+      ? yaml["main_camera_rotate_before_detection_deg"].as<int>()
+      : 0);
+  if (rotation_deg != 0 && rotation_deg != 180) {
+    throw std::runtime_error(
+      "Only main_camera_rotate_before_detection_deg 0 or 180 is supported.");
+  }
+  return rotation_deg;
+}
+
+void rotate_main_camera_image(cv::Mat & img, int rotation_deg)
+{
+  if (rotation_deg == 180) {
+    cv::rotate(img, img, cv::ROTATE_180);
+  }
 }
 
 const char * gimbal_mode_name(io::Mode mode)
@@ -322,13 +373,17 @@ bool is_unlocked_outpost_target(const auto_aim::Target & target)
 }
 
 void apply_sentry_tracking_yaws(
-  io::Command & command, const auto_aim::Target & target, double current_big_yaw_rad)
+  io::Command & command, const auto_aim::Target & target, double current_big_yaw_rad,
+  MainTrackingBigYawMode big_yaw_mode)
 {
   if (!command.control) return;
   command.small_yaw = command.yaw;
-  command.big_yaw =
-    is_unlocked_outpost_target(target) ? current_big_yaw_rad
-                                      : target_center_big_yaw_rad(target, current_big_yaw_rad);
+  if (big_yaw_mode == MainTrackingBigYawMode::target_center &&
+      !is_unlocked_outpost_target(target)) {
+    command.big_yaw = target_center_big_yaw_rad(target, current_big_yaw_rad);
+  } else {
+    command.big_yaw = current_big_yaw_rad;
+  }
   command.has_target_yaw = true;
 }
 
@@ -520,6 +575,10 @@ int main(int argc, char * argv[])
                                                      ? tools::parse_gimbal_axis_order(
                                                          yaml["gimbal_axis_order"].as<std::string>())
                                                      : tools::GimbalAxisOrder::yaw_pitch;
+  const MainTrackingBigYawMode main_tracking_big_yaw_mode =
+    read_main_tracking_big_yaw_mode(yaml);
+  const int main_camera_rotate_before_detection_deg =
+    read_main_camera_rotate_before_detection_deg(yaml);
   const std::string auto_aim_device = read_infer_device("auto_aim_device");
   const std::string omni_device = read_infer_device("omni_device");
   const double omni_retarget_cooldown_s =
@@ -559,7 +618,12 @@ int main(int argc, char * argv[])
 
   tools::logger()->info(
     "[OVSentryOmniMPC] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
-  tools::logger()->info("[OVSentryOmniMPC] rotating main camera image by 180 deg.");
+  tools::logger()->info(
+    "[OVSentryOmniMPC] main tracking big yaw mode: {}",
+    main_tracking_big_yaw_mode_name(main_tracking_big_yaw_mode));
+  tools::logger()->info(
+    "[OVSentryOmniMPC] main camera runtime rotation: {} deg.",
+    main_camera_rotate_before_detection_deg);
 
   tools::Exiter exiter;
   tools::Plotter plotter;
@@ -612,7 +676,7 @@ int main(int argc, char * argv[])
     try {
       auto_aim_camera->read(main_img, main_timestamp);
       if (main_img.empty()) continue;
-      rotate_main_camera_image(main_img);
+      rotate_main_camera_image(main_img, main_camera_rotate_before_detection_deg);
     } catch (const std::exception & e) {
       tools::logger()->error("[OVSentryOmniMPC] main camera read failed: {}", e.what());
       continue;
@@ -933,7 +997,8 @@ int main(int argc, char * argv[])
 
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (command.control && !targets.empty()) {
-        apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+        apply_sentry_tracking_yaws(
+          command, targets.front(), gimbal_state.big_yaw, main_tracking_big_yaw_mode);
       }
       const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
       command.shoot =
@@ -978,6 +1043,13 @@ int main(int argc, char * argv[])
     data["mpc_fire"] = command.shoot ? 1 : 0;
     data["mpc_yaw"] = (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3;
     data["mpc_pitch"] = command.pitch * 57.3;
+    data["main_tracking_big_yaw_mode"] =
+      main_tracking_big_yaw_mode_name(main_tracking_big_yaw_mode);
+    data["main_camera_runtime_rotation_deg"] = main_camera_rotate_before_detection_deg;
+    if (command.has_target_yaw) {
+      data["mpc_big_yaw"] = command.big_yaw * 57.3;
+      data["mpc_small_yaw"] = command.small_yaw * 57.3;
+    }
     data["target_armor_id"] = static_cast<int>(command.armor_id);
     data["target_vx"] = command.vx;
     data["target_vy"] = command.vy;
