@@ -103,9 +103,13 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
-  if (yaml["image_width"].IsDefined() && yaml["image_height"].IsDefined()) {
+  const auto image_width_node =
+    yaml["camera_image_width"].IsDefined() ? yaml["camera_image_width"] : yaml["image_width"];
+  const auto image_height_node =
+    yaml["camera_image_height"].IsDefined() ? yaml["camera_image_height"] : yaml["image_height"];
+  if (image_width_node.IsDefined() && image_height_node.IsDefined()) {
     img_center_ = cv::Point2f(
-      yaml["image_width"].as<float>() * 0.5F, yaml["image_height"].as<float>() * 0.5F);
+      image_width_node.as<float>() * 0.5F, image_height_node.as<float>() * 0.5F);
   }
 
   YAML::Node priority_yaml;

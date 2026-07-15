@@ -61,13 +61,18 @@ void apply_camera_image_rotation(
     throw std::runtime_error("Only camera_image_rotation_deg 0 or 180 is supported.");
   }
 
-  if (!yaml["image_width"] || !yaml["image_height"]) {
+  const auto image_width_node =
+    yaml["camera_image_width"].IsDefined() ? yaml["camera_image_width"] : yaml["image_width"];
+  const auto image_height_node =
+    yaml["camera_image_height"].IsDefined() ? yaml["camera_image_height"] : yaml["image_height"];
+  if (!image_width_node || !image_height_node) {
     throw std::runtime_error(
-      "camera_image_rotation_deg=180 requires image_width and image_height in yaml.");
+      "camera_image_rotation_deg=180 requires camera_image_width/camera_image_height or "
+      "image_width/image_height in yaml.");
   }
 
-  const double image_width = yaml["image_width"].as<double>();
-  const double image_height = yaml["image_height"].as<double>();
+  const double image_width = image_width_node.as<double>();
+  const double image_height = image_height_node.as<double>();
   camera_matrix(0, 2) = image_width - 1.0 - camera_matrix(0, 2);
   camera_matrix(1, 2) = image_height - 1.0 - camera_matrix(1, 2);
 
@@ -80,7 +85,9 @@ void apply_camera_image_rotation(
   distort_coeffs(0, 2) = -distort_coeffs(0, 2);
   distort_coeffs(0, 3) = -distort_coeffs(0, 3);
 
-  tools::logger()->info("[Solver] camera_image_rotation_deg=180 applied.");
+  tools::logger()->info(
+    "[Solver] camera_image_rotation_deg=180 applied for image {:.0f}x{:.0f}.", image_width,
+    image_height);
 }
 }  // namespace
 
