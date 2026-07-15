@@ -58,6 +58,7 @@ private:
   std::string state_, pre_state_;
   Target target_;
   std::chrono::steady_clock::time_point last_timestamp_;
+  cv::Point2f img_center_;
   ArmorPriority omni_target_priority_;
   std::map<ArmorName, ArmorPriority> armor_priority_;
 

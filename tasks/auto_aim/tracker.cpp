@@ -88,6 +88,7 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   state_{"lost"},
   pre_state_{"lost"},
   last_timestamp_(std::chrono::steady_clock::now()),
+  img_center_{720.0F, 540.0F},
   omni_target_priority_{ArmorPriority::fifth},
   armor_priority_{
     {ArmorName::one, ArmorPriority::fifth},     {ArmorName::two, ArmorPriority::fifth},
@@ -102,6 +103,10 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
+  if (yaml["image_width"].IsDefined() && yaml["image_height"].IsDefined()) {
+    img_center_ = cv::Point2f(
+      yaml["image_width"].as<float>() * 0.5F, yaml["image_height"].as<float>() * 0.5F);
+  }
 
   YAML::Node priority_yaml;
   bool has_priority_yaml = false;
@@ -299,8 +304,8 @@ void Tracker::sort_armors(std::list<Armor> & armors) const
   apply_priority(armors);
 
   // 先按画面中心距离排序；std::list::sort 是稳定排序，后面同优先级时会保留这个顺序。
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO: 可改成从相机配置读取
+  armors.sort([this](const Armor & a, const Armor & b) {
+    const cv::Point2f img_center = img_center_;
     auto distance_1 = cv::norm(a.center - img_center);
     auto distance_2 = cv::norm(b.center - img_center);
     return distance_1 < distance_2;

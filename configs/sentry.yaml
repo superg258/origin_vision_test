@@ -26,6 +26,7 @@ use_roi: false
 #####-----USB相机参数-----#####
 image_width: 1920
 image_height: 1080
+camera_image_rotation_deg: 180 # Set 180 when the image sent to detection/PnP is rotated 180 deg.
 fov_h: 57.7 #87.7
 fov_v: 56.7 
 new_fov_h: 27 #67

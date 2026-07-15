@@ -1,4 +1,52 @@
 #include "buff_solver.hpp"
+
+#include <stdexcept>
+
+#include "tools/logger.hpp"
+
+namespace
+{
+int normalized_rotation_deg(int deg)
+{
+  deg %= 360;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
+void apply_camera_image_rotation(
+  const YAML::Node & yaml, Eigen::Matrix3d & R_camera2gimbal,
+  Eigen::Matrix<double, 3, 3, Eigen::RowMajor> & camera_matrix,
+  Eigen::Matrix<double, 1, 5> & distort_coeffs)
+{
+  const int rotation_deg =
+    normalized_rotation_deg(yaml["camera_image_rotation_deg"].as<int>(0));
+  if (rotation_deg == 0) return;
+  if (rotation_deg != 180) {
+    throw std::runtime_error("Only camera_image_rotation_deg 0 or 180 is supported.");
+  }
+
+  if (!yaml["image_width"] || !yaml["image_height"]) {
+    throw std::runtime_error(
+      "camera_image_rotation_deg=180 requires image_width and image_height in yaml.");
+  }
+
+  const double image_width = yaml["image_width"].as<double>();
+  const double image_height = yaml["image_height"].as<double>();
+  camera_matrix(0, 2) = image_width - 1.0 - camera_matrix(0, 2);
+  camera_matrix(1, 2) = image_height - 1.0 - camera_matrix(1, 2);
+
+  Eigen::Matrix3d R_rotated_camera2camera = Eigen::Matrix3d::Identity();
+  R_rotated_camera2camera(0, 0) = -1.0;
+  R_rotated_camera2camera(1, 1) = -1.0;
+  R_camera2gimbal = R_camera2gimbal * R_rotated_camera2camera;
+
+  distort_coeffs(0, 2) = -distort_coeffs(0, 2);
+  distort_coeffs(0, 3) = -distort_coeffs(0, 3);
+
+  tools::logger()->info("[BuffSolver] camera_image_rotation_deg=180 applied.");
+}
+}  // namespace
+
 namespace auto_buff
 {
 cv::Matx33f Solver::rotation_matrix(double angle) const
@@ -38,6 +86,7 @@ Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3
   auto distort_coeffs_data = yaml["distort_coeffs"].as<std::vector<double>>();
   Eigen::Matrix<double, 3, 3, Eigen::RowMajor> camera_matrix(camera_matrix_data.data());
   Eigen::Matrix<double, 1, 5> distort_coeffs(distort_coeffs_data.data());
+  apply_camera_image_rotation(yaml, R_camera2gimbal_, camera_matrix, distort_coeffs);
   cv::eigen2cv(camera_matrix, camera_matrix_);
   cv::eigen2cv(distort_coeffs, distort_coeffs_);
 
