@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,6 +94,22 @@ std::string slot_name(omniperception::OmniCameraSlot slot)
 }
 
 bool is_buff_mode(io::Mode mode) { return mode == io::small_buff || mode == io::big_buff; }
+
+int normalized_image_rotation_deg(const YAML::Node & yaml)
+{
+  int rotation_deg = yaml["camera_image_rotation_deg"] ? yaml["camera_image_rotation_deg"].as<int>() : 0;
+  rotation_deg %= 360;
+  if (rotation_deg < 0) rotation_deg += 360;
+  if (rotation_deg != 0 && rotation_deg != 180) {
+    throw std::runtime_error("Only camera_image_rotation_deg 0 or 180 is supported.");
+  }
+  return rotation_deg;
+}
+
+void rotate_image_in_place(cv::Mat & img, int rotation_deg)
+{
+  if (rotation_deg == 180) cv::rotate(img, img, cv::ROTATE_180);
+}
 
 const char * gimbal_mode_name(io::Mode mode)
 {
@@ -537,6 +554,7 @@ int main(int argc, char * argv[])
   const std::string auto_aim_ignore_msg_type =
     yaml["auto_aim_ignore_msg_type"] ? yaml["auto_aim_ignore_msg_type"].as<std::string>()
                                      : "rm_interfaces/msg/RequestAutoAimIgnore";
+  const int main_camera_rotation_deg = normalized_image_rotation_deg(yaml);
 
   const double omni_fov_h_deg = read_cli_or_yaml_double("fov_h", "omni_fov_h_deg", 120.0);
   const double omni_fov_v_deg = read_cli_or_yaml_double("fov_v", "omni_fov_v_deg", 67.0);
@@ -555,6 +573,10 @@ int main(int argc, char * argv[])
 
   tools::logger()->info(
     "[OVSentryOmniMPC] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
+  if (main_camera_rotation_deg != 0) {
+    tools::logger()->info(
+      "[OVSentryOmniMPC] rotating main camera image by {} deg.", main_camera_rotation_deg);
+  }
 
   tools::Exiter exiter;
   tools::Plotter plotter;
@@ -607,6 +629,7 @@ int main(int argc, char * argv[])
     try {
       auto_aim_camera->read(main_img, main_timestamp);
       if (main_img.empty()) continue;
+      rotate_image_in_place(main_img, main_camera_rotation_deg);
     } catch (const std::exception & e) {
       tools::logger()->error("[OVSentryOmniMPC] main camera read failed: {}", e.what());
       continue;
