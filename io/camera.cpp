@@ -34,6 +34,7 @@ Camera::Camera(const std::string & config_path)
 void Camera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp)
 {
   camera_->read(img, timestamp);
+  cv::rotate(img,img,cv::ROTATE_180);
 }
 
 }  // namespace io

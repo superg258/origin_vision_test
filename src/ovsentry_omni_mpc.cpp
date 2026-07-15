@@ -304,11 +304,25 @@ double nearest_continuous_yaw_rad(double wrapped_yaw_rad, double reference_yaw_r
   return reference_yaw_rad + tools::limit_rad(wrapped_yaw_rad - reference_yaw_rad);
 }
 
-double target_center_big_yaw_rad(const auto_aim::Target & target, double current_big_yaw_rad)
+double target_center_big_yaw_rad(
+  const auto_aim::Target & target,
+  double current_big_yaw_rad,
+  double current_world_yaw_rad)
 {
   const auto & ekf_x = target.ekf_x();
-  const double wrapped_center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
-  return nearest_continuous_yaw_rad(wrapped_center_yaw, current_big_yaw_rad);
+
+  // 目标中心在世界坐标系中的绝对 yaw
+  const double target_world_yaw_rad =
+    std::atan2(ekf_x[2], ekf_x[0]);
+
+  // 只计算目标相对于当前枪口世界姿态的最短角增量
+  const double world_yaw_error_rad =
+    tools::limit_rad(
+      target_world_yaw_rad - current_world_yaw_rad);
+
+  // 将世界角增量叠加到电控大 yaw 编码器当前值上
+  // 不再混用世界绝对 yaw 和大 yaw 编码器绝对角
+  return current_big_yaw_rad + world_yaw_error_rad;
 }
 
 bool is_unlocked_outpost_target(const auto_aim::Target & target)
@@ -317,14 +331,43 @@ bool is_unlocked_outpost_target(const auto_aim::Target & target)
 }
 
 void apply_sentry_tracking_yaws(
-  io::Command & command, const auto_aim::Target & target, double current_big_yaw_rad)
+  io::Command & command,
+  const auto_aim::Target & target,
+  double current_big_yaw_rad,
+  double current_small_yaw_rad,
+  double current_world_yaw_rad)
 {
   if (!command.control) return;
-  command.small_yaw = command.yaw;
+
+  // 大 yaw 根据目标世界方向的相对误差运动
   command.big_yaw =
-    is_unlocked_outpost_target(target) ? current_big_yaw_rad
-                                      : target_center_big_yaw_rad(target, current_big_yaw_rad);
+    is_unlocked_outpost_target(target)
+      ? current_big_yaw_rad
+      : target_center_big_yaw_rad(
+          target,
+          current_big_yaw_rad,
+          current_world_yaw_rad);
+
+  // 关键修改：
+  // 暂时保持小 yaw 当前角度，避免把世界/几何 yaw
+  // 直接作为小 yaw 关节目标，从而触发180°转头。
+  command.small_yaw = current_small_yaw_rad;
+
   command.has_target_yaw = true;
+
+  tools::logger()->warn(
+    "[YawFix] "
+    "world_now={:.2f}, "
+    "big_now={:.2f}, big_cmd={:.2f}, big_delta={:.2f}, "
+    "small_now={:.2f}, small_cmd={:.2f}, small_delta={:.2f}",
+    current_world_yaw_rad * 57.3,
+    current_big_yaw_rad * 57.3,
+    command.big_yaw * 57.3,
+    (command.big_yaw - current_big_yaw_rad) * 57.3,
+    current_small_yaw_rad * 57.3,
+    command.small_yaw * 57.3,
+    tools::limit_rad(
+      command.small_yaw - current_small_yaw_rad) * 57.3);
 }
 
 void apply_abs_yaw_target(
@@ -732,6 +775,7 @@ int main(int argc, char * argv[])
 
       const double buff_big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
       const double buff_small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
+
       gimbal->send_mpc(
         command.control, command.shoot, buff_big_yaw, buff_small_yaw, command.pitch, 0.0, 0.0,
         0.0, 0.0, 0, 0.0, 0.0, 0.0);
@@ -927,7 +971,12 @@ int main(int argc, char * argv[])
 
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (command.control && !targets.empty()) {
-        apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+        apply_sentry_tracking_yaws(
+  command,
+  targets.front(),
+  gimbal_state.big_yaw,
+  gimbal_state.yaw,
+  ypr[0]);
       }
       const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
       command.shoot =
@@ -936,27 +985,92 @@ int main(int argc, char * argv[])
 
       const bool unlocked_outpost =
         !targets.empty() && is_unlocked_outpost_target(targets.front());
-      double small_yaw_vel = 0.0;
-      double pitch_vel = 0.0;
-      double small_yaw_acc = 0.0;
-      double pitch_acc = 0.0;
-      if (command.control && !targets.empty() && !unlocked_outpost) {
-        const auto mpc_plan = planner.plan(targets.front(), gimbal->bullet_speed());
-        if (mpc_plan.control) {
-          small_yaw_vel = mpc_plan.yaw_vel;
-          pitch_vel = mpc_plan.pitch_vel;
-          small_yaw_acc = mpc_plan.yaw_acc;
-          pitch_acc = mpc_plan.pitch_acc;
-        }
-      }
+     double small_yaw_vel = 0.0;
+double pitch_vel = 0.0;
+double small_yaw_acc = 0.0;
+double pitch_acc = 0.0;
 
-      const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
-      const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
-      gimbal->send_mpc(
-        command.control, command.shoot, big_yaw, small_yaw, command.pitch, small_yaw_vel,
-        pitch_vel, small_yaw_acc, pitch_acc, static_cast<uint8_t>(command.armor_id), command.vx,
-        command.vy, command.horizon_distance);
-    }
+if (command.control && !targets.empty() && !unlocked_outpost) {
+  const auto mpc_plan =
+    planner.plan(targets.front(), gimbal->bullet_speed());
+
+  if (mpc_plan.control) {
+    // yaw 前馈暂时保留
+    small_yaw_vel = mpc_plan.yaw_vel;
+    small_yaw_acc = mpc_plan.yaw_acc;
+
+    // 关键：关闭 pitch 速度和加速度前馈
+    pitch_vel = 0.0;
+    pitch_acc = 0.0;
+  }
+}
+ const double big_yaw =
+  command.has_target_yaw ? command.big_yaw : command.yaw;
+
+const double small_yaw =
+  command.has_target_yaw ? command.small_yaw : command.yaw;
+
+// 临时测试：进入自瞄时锁存当前 pitch。
+// 自瞄期间始终发送同一个固定 pitch。
+static std::optional<double> test_hold_pitch;
+
+if (command.control) {
+  if (!test_hold_pitch.has_value()) {
+    test_hold_pitch = gimbal_state.pitch;
+
+    tools::logger()->warn(
+      "[PitchHoldTest] lock pitch at {:.2f} deg",
+      test_hold_pitch.value() * 180.0 / M_PI);
+  }
+} else {
+  // 退出自瞄后清除，下次重新锁存
+  test_hold_pitch.reset();
+}
+
+const double pitch_to_send =
+  test_hold_pitch.value_or(gimbal_state.pitch);
+
+// gimbal_state.pitch 和 pitch_to_send 都是视觉内部坐标，
+// 不要在这里额外取负号。
+const double pitch_now_deg =
+  gimbal_state.pitch * 180.0 / M_PI;
+
+const double pitch_cmd_deg =
+  pitch_to_send * 180.0 / M_PI;
+
+const double pitch_error_deg =
+  tools::limit_rad(
+    pitch_to_send - gimbal_state.pitch) *
+  180.0 / M_PI;
+
+if (command.control) {
+  tools::logger()->warn(
+    "[PitchCheck] "
+    "now={:.2f}, cmd={:.2f}, err={:.2f}, "
+    "vel_now={:.2f}, vel_cmd=0.00, acc_cmd=0.00",
+    pitch_now_deg,
+    pitch_cmd_deg,
+    pitch_error_deg,
+    gimbal_state.pitch_vel * 180.0 / M_PI);
+}
+
+// 固定 pitch 测试：
+// pitch 角度固定；pitch 速度、加速度前馈强制清零。
+gimbal->send_mpc(
+  command.control,
+  command.shoot,
+  big_yaw,
+  small_yaw,
+  pitch_to_send,
+  small_yaw_vel,
+  0.0,  // pitch_vel
+  small_yaw_acc,
+  0.0,  // pitch_acc
+  static_cast<uint8_t>(command.armor_id),
+  command.vx,
+  command.vy,
+  command.horizon_distance);
+}
 
     nlohmann::json data;
     data["mode"] = buff_mode ? 2 : (omni_mode ? 1 : 0);

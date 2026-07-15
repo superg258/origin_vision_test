@@ -125,6 +125,7 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
 {
   const bool fire_advice = control && fire;
   const double big_yaw_deg = control ? rad2deg(big_yaw_rad) : 0.0;
+  // 直接发送视觉/MPC给出的 small_yaw，不额外增加180°。
   const double small_yaw_deg = control ? rad2deg(small_yaw_rad) : 0.0;
   const double pitch_deg = control ? rad2deg(-pitch_rad) : 0.0;
   const double yaw_vel_deg = control ? rad2deg(yaw_vel_rad) : 0.0;
