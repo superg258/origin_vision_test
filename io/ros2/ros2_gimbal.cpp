@@ -4,6 +4,8 @@
 #include <fastcdr/FastBuffer.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
 #include <set>
@@ -22,6 +24,18 @@ namespace
 {
 inline double deg2rad(double deg) { return deg * M_PI / 180.0; }
 inline double rad2deg(double rad) { return rad * 180.0 / M_PI; }
+
+// 视觉内部 pitch 与电控 pitch 使用相反的正方向。
+// 所有符号转换只允许通过下面两个函数完成，避免收发两端不对称。
+inline double internal_pitch_to_ec_deg(double internal_pitch_rad)
+{
+  return -rad2deg(internal_pitch_rad);
+}
+
+inline double ec_pitch_to_internal_rad(double ec_pitch_deg)
+{
+  return -deg2rad(ec_pitch_deg);
+}
 
 std::chrono::microseconds read_imu_query_offset(const YAML::Node & yaml)
 {
@@ -125,13 +139,23 @@ rclcpp::SerializedMessage serialize_gimbal_mpc_cmd(
 {
   const bool fire_advice = control && fire;
   const double big_yaw_deg = control ? rad2deg(big_yaw_rad) : 0.0;
-  // 直接发送视觉/MPC给出的 small_yaw，不额外增加180°。
   const double small_yaw_deg = control ? rad2deg(small_yaw_rad) : 0.0;
-  const double pitch_deg = control ? rad2deg(-pitch_rad) : 0.0;
+ const double pitch_deg =
+  control ? rad2deg(-pitch_rad) : 0.0;
   const double yaw_vel_deg = control ? rad2deg(yaw_vel_rad) : 0.0;
-  const double pitch_vel_deg = control ? rad2deg(-pitch_vel_rad) : 0.0;
+const double pitch_vel_deg =
+  control ? rad2deg(-pitch_vel_rad) : 0.0;
   const double yaw_acc_deg = control ? rad2deg(yaw_acc_rad) : 0.0;
-  const double pitch_acc_deg = control ? rad2deg(-pitch_acc_rad) : 0.0;
+const double pitch_acc_deg =
+  control ? rad2deg(-pitch_acc_rad) : 0.0;
+
+  static std::atomic<uint64_t> pitch_tx_count{0};
+  if (control && (++pitch_tx_count % 10 == 0)) {
+    tools::logger()->warn(
+      "[PitchTX] internal_rad={:.4f}, internal_deg={:.2f}, "
+      "ec_pitch={:.2f}, ec_vel={:.2f}, ec_acc={:.2f}",
+      pitch_rad, rad2deg(pitch_rad), pitch_deg, pitch_vel_deg, pitch_acc_deg);
+  }
 
   eprosima::fastcdr::FastBuffer buffer;
   eprosima::fastcdr::Cdr cdr(buffer);
@@ -314,9 +338,15 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
       *message, pitch_deg, roll_deg, yaw_deg, mode_raw, q, yaw_vel_deg, pitch_vel_deg,
       bullet_speed, big_yaw_deg);
 
+    const double internal_pitch_rad = ec_pitch_to_internal_rad(pitch_deg);
+    const double internal_pitch_vel_rad = ec_pitch_to_internal_rad(pitch_vel_deg);
+
     if (!is_valid_quaternion(q)) {
-      q = quaternion_from_deg_euler(yaw_deg, pitch_deg, roll_deg, gimbal_axis_order_);
+      // 四元数无效时，用已经转换到视觉内部坐标系的 pitch 重建姿态。
+      q = quaternion_from_deg_euler(
+        yaw_deg, rad2deg(internal_pitch_rad), roll_deg, gimbal_axis_order_);
     } else {
+      // 有效 IMU 四元数保持原样，避免对完整三维姿态做错误的单轴翻转。
       q.normalize();
     }
 
@@ -329,9 +359,9 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
       latest_q_ = q;
       has_latest_q_ = true;
       yaw_ = deg2rad(yaw_deg);
-      pitch_ = deg2rad(pitch_deg);
+      pitch_ = internal_pitch_rad;
       yaw_vel_ = deg2rad(yaw_vel_deg);
-      pitch_vel_ = deg2rad(pitch_vel_deg);
+      pitch_vel_ = internal_pitch_vel_rad;
       bullet_speed_ = bullet_speed;
       big_yaw_ = deg2rad(big_yaw_deg);
 
@@ -355,6 +385,19 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
           mode_ = Mode::idle;
           break;
       }
+    }
+
+    static std::atomic<uint64_t> pitch_rx_count{0};
+    if (++pitch_rx_count % 10 == 0) {
+      // 这里打印的是实际写入 pitch_ 的同一个 internal_pitch_rad，
+      // 不再用日志里的临时手算值代替真实状态。
+      tools::logger()->warn(
+        "[PitchRXApplied] ec_raw={:.2f}, ec_vel={:.2f}, "
+        "stored_internal={:.2f}, stored_internal_vel={:.2f}, "
+        "q=({:.4f},{:.4f},{:.4f},{:.4f})",
+        pitch_deg, pitch_vel_deg,
+        rad2deg(internal_pitch_rad), rad2deg(internal_pitch_vel_rad),
+        q.w(), q.x(), q.y(), q.z());
     }
   } catch (const std::exception & e) {
     tools::logger()->warn("[ROS2Gimbal] Failed to parse status message: {}", e.what());

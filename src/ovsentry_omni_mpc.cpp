@@ -335,39 +335,72 @@ void apply_sentry_tracking_yaws(
   const auto_aim::Target & target,
   double current_big_yaw_rad,
   double current_small_yaw_rad,
-  double current_world_yaw_rad)
+  double current_world_yaw_rad,
+  tools::GimbalAxisOrder gimbal_axis_order)
 {
   if (!command.control) return;
 
-  // 大 yaw 根据目标世界方向的相对误差运动
-  command.big_yaw =
-    is_unlocked_outpost_target(target)
-      ? current_big_yaw_rad
-      : target_center_big_yaw_rad(
-          target,
-          current_big_yaw_rad,
-          current_world_yaw_rad);
+  // 1. 大 yaw 跟踪敌方旋转中心
+  const auto & x = target.ekf_x();
 
-  // 关键修改：
-  // 暂时保持小 yaw 当前角度，避免把世界/几何 yaw
-  // 直接作为小 yaw 关节目标，从而触发180°转头。
-  command.small_yaw = current_small_yaw_rad;
+  const double center_world_yaw_rad =
+    std::atan2(x[2], x[0]);
+
+  const double center_yaw_error_rad =
+    tools::limit_rad(
+      center_world_yaw_rad -
+      current_world_yaw_rad);
+
+  if (is_unlocked_outpost_target(target)) {
+    command.big_yaw = current_big_yaw_rad;
+  } else {
+    // 只把世界角增量叠加到当前大 yaw 编码器反馈
+    command.big_yaw =
+      current_big_yaw_rad +
+      center_yaw_error_rad;
+  }
+
+  // 2. 小 yaw 跟踪 Aimer 最终选中的装甲板
+  // command.yaw / command.pitch 是 Aimer 已计算好的命令，
+  // 反解成世界方向，避免 pitch_yaw 的等价180°角分支。
+  const Eigen::Vector3d armor_world_direction =
+    tools::gimbal_direction_from_command(
+      command.yaw,
+      command.pitch,
+      gimbal_axis_order);
+
+  const double armor_world_yaw_rad =
+    std::atan2(
+      armor_world_direction.y(),
+      armor_world_direction.x());
+
+  const double armor_yaw_error_rad =
+    tools::limit_rad(
+      armor_world_yaw_rad -
+      current_world_yaw_rad);
+
+  // 小 yaw 独立跟装甲板，不减 big yaw，也不把 small yaw 加给 big yaw
+  command.small_yaw =
+    current_small_yaw_rad +
+    armor_yaw_error_rad;
 
   command.has_target_yaw = true;
 
   tools::logger()->warn(
-    "[YawFix] "
-    "world_now={:.2f}, "
-    "big_now={:.2f}, big_cmd={:.2f}, big_delta={:.2f}, "
-    "small_now={:.2f}, small_cmd={:.2f}, small_delta={:.2f}",
-    current_world_yaw_rad * 57.3,
-    current_big_yaw_rad * 57.3,
-    command.big_yaw * 57.3,
-    (command.big_yaw - current_big_yaw_rad) * 57.3,
-    current_small_yaw_rad * 57.3,
-    command.small_yaw * 57.3,
-    tools::limit_rad(
-      command.small_yaw - current_small_yaw_rad) * 57.3);
+    "[Yaw180Fix] "
+    "world={:.2f}, center={:.2f}, armor={:.2f}, "
+    "center_err={:.2f}, armor_err={:.2f}, "
+    "big_now={:.2f}, big_cmd={:.2f}, "
+    "small_now={:.2f}, small_cmd={:.2f}",
+    current_world_yaw_rad * 180.0 / M_PI,
+    center_world_yaw_rad * 180.0 / M_PI,
+    armor_world_yaw_rad * 180.0 / M_PI,
+    center_yaw_error_rad * 180.0 / M_PI,
+    armor_yaw_error_rad * 180.0 / M_PI,
+    current_big_yaw_rad * 180.0 / M_PI,
+    command.big_yaw * 180.0 / M_PI,
+    current_small_yaw_rad * 180.0 / M_PI,
+    command.small_yaw * 180.0 / M_PI);
 }
 
 void apply_abs_yaw_target(
@@ -971,12 +1004,13 @@ int main(int argc, char * argv[])
 
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (command.control && !targets.empty()) {
-        apply_sentry_tracking_yaws(
+    apply_sentry_tracking_yaws(
   command,
   targets.front(),
   gimbal_state.big_yaw,
   gimbal_state.yaw,
-  ypr[0]);
+  ypr[0],
+  gimbal_axis_order);
       }
       const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
       command.shoot =
@@ -990,72 +1024,131 @@ double pitch_vel = 0.0;
 double small_yaw_acc = 0.0;
 double pitch_acc = 0.0;
 
-if (command.control && !targets.empty() && !unlocked_outpost) {
-  const auto mpc_plan =
-    planner.plan(targets.front(), gimbal->bullet_speed());
+// if (command.control && !targets.empty() && !unlocked_outpost) {
+//   const auto mpc_plan =
+//     planner.plan(targets.front(), gimbal->bullet_speed());
 
-  if (mpc_plan.control) {
-    // yaw 前馈暂时保留
-    small_yaw_vel = mpc_plan.yaw_vel;
-    small_yaw_acc = mpc_plan.yaw_acc;
+//   if (mpc_plan.control) {
+//     // yaw 前馈暂时保留
+//     small_yaw_vel = mpc_plan.yaw_vel;
+//     small_yaw_acc = mpc_plan.yaw_acc;
 
-    // 关键：关闭 pitch 速度和加速度前馈
-    pitch_vel = 0.0;
-    pitch_acc = 0.0;
-  }
-}
- const double big_yaw =
+//     // 关键：关闭 pitch 速度和加速度前馈
+//     pitch_vel = 0.0;
+//     pitch_acc = 0.0;
+//   }
+// }
+
+const double big_yaw =
   command.has_target_yaw ? command.big_yaw : command.yaw;
 
 const double small_yaw =
   command.has_target_yaw ? command.small_yaw : command.yaw;
 
-// 临时测试：进入自瞄时锁存当前 pitch。
-// 自瞄期间始终发送同一个固定 pitch。
-static std::optional<double> test_hold_pitch;
+// Aimer 每一帧给出的原始 pitch 目标
+const double raw_pitch = command.pitch;
 
-if (command.control) {
-  if (!test_hold_pitch.has_value()) {
-    test_hold_pitch = gimbal_state.pitch;
+// 动态 pitch 滤波状态
+static bool pitch_filter_initialized = false;
+static double filtered_pitch = 0.0;
+static uint8_t last_pitch_armor_id = 0;
+static auto last_pitch_time = std::chrono::steady_clock::now();
 
-    tools::logger()->warn(
-      "[PitchHoldTest] lock pitch at {:.2f} deg",
-      test_hold_pitch.value() * 180.0 / M_PI);
-  }
+const auto pitch_now_time = std::chrono::steady_clock::now();
+double pitch_to_send = gimbal_state.pitch;
+
+if (!command.control || !std::isfinite(raw_pitch)) {
+  // 丢失目标后重置，下一次从当前云台姿态开始
+  pitch_filter_initialized = false;
+  last_pitch_armor_id = 0;
+  last_pitch_time = pitch_now_time;
 } else {
-  // 退出自瞄后清除，下次重新锁存
-  test_hold_pitch.reset();
+  double dt = std::chrono::duration<double>(
+    pitch_now_time - last_pitch_time).count();
+
+  // 防止首帧、卡顿等导致异常步长
+  dt = std::clamp(dt, 0.001, 0.05);
+  last_pitch_time = pitch_now_time;
+
+  const bool target_changed =
+    last_pitch_armor_id != 0 &&
+    command.armor_id != 0 &&
+    command.armor_id != last_pitch_armor_id;
+
+  if (!pitch_filter_initialized || target_changed) {
+    // 从实际反馈角开始，不让第一次识别时突然跳转
+    filtered_pitch = gimbal_state.pitch;
+    pitch_filter_initialized = true;
+  }
+
+  if (command.armor_id != 0) {
+    last_pitch_armor_id = command.armor_id;
+  }
+
+  // 原始目标相对于滤波目标的误差
+  double pitch_delta = raw_pitch - filtered_pitch;
+
+  // 小于0.15°的抖动忽略
+  constexpr double pitch_deadband =
+    0.15 * M_PI / 180.0;
+
+  if (std::abs(pitch_delta) < pitch_deadband) {
+    pitch_delta = 0.0;
+  }
+
+  // 一阶低通时间常数，越大越平滑但响应越慢
+  constexpr double pitch_filter_tau = 0.12;
+
+  const double alpha =
+    1.0 - std::exp(-dt / pitch_filter_tau);
+
+  const double filtered_step =
+    alpha * pitch_delta;
+
+  // pitch 最大跟踪速度：35°/s
+  constexpr double max_pitch_rate =
+    35.0 * M_PI / 180.0;
+
+  const double max_pitch_step =
+    max_pitch_rate * dt;
+
+  filtered_pitch += std::clamp(
+    filtered_step,
+    -max_pitch_step,
+    max_pitch_step);
+
+  pitch_to_send = filtered_pitch;
 }
 
-const double pitch_to_send =
-  test_hold_pitch.value_or(gimbal_state.pitch);
 
-// gimbal_state.pitch 和 pitch_to_send 都是视觉内部坐标，
-// 不要在这里额外取负号。
-const double pitch_now_deg =
-  gimbal_state.pitch * 180.0 / M_PI;
 
-const double pitch_cmd_deg =
-  pitch_to_send * 180.0 / M_PI;
+if (command.control && frame_count % 10 == 0) {
+  const double raw_aim_pitch_deg =
+    command.pitch * 180.0 / M_PI;
 
-const double pitch_error_deg =
-  tools::limit_rad(
-    pitch_to_send - gimbal_state.pitch) *
-  180.0 / M_PI;
+  // 这里必须使用真正传给 send_mpc 的变量
+  const double send_internal_pitch_deg =
+    pitch_to_send * 180.0 / M_PI;
 
-if (command.control) {
+  // ros2_gimbal.cpp 发送时会再次取负
+  const double send_ec_pitch_deg =
+    -pitch_to_send * 180.0 / M_PI;
+
+  const double feedback_internal_pitch_deg =
+    gimbal_state.pitch * 180.0 / M_PI;
+
   tools::logger()->warn(
-    "[PitchCheck] "
-    "now={:.2f}, cmd={:.2f}, err={:.2f}, "
-    "vel_now={:.2f}, vel_cmd=0.00, acc_cmd=0.00",
-    pitch_now_deg,
-    pitch_cmd_deg,
-    pitch_error_deg,
-    gimbal_state.pitch_vel * 180.0 / M_PI);
+    "[PitchFlow] "
+    "aim_raw={:.2f}, "
+    "send_internal={:.2f}, send_ec={:.2f}, "
+    "feedback_internal={:.2f}, "
+    "internal_error={:.2f}",
+    raw_aim_pitch_deg,
+    send_internal_pitch_deg,
+    send_ec_pitch_deg,
+    feedback_internal_pitch_deg,
+    (pitch_to_send - gimbal_state.pitch) * 180.0 / M_PI);
 }
-
-// 固定 pitch 测试：
-// pitch 角度固定；pitch 速度、加速度前馈强制清零。
 gimbal->send_mpc(
   command.control,
   command.shoot,
@@ -1063,9 +1156,9 @@ gimbal->send_mpc(
   small_yaw,
   pitch_to_send,
   small_yaw_vel,
-  0.0,  // pitch_vel
+  0.0,  // pitch_vel 暂时关闭
   small_yaw_acc,
-  0.0,  // pitch_acc
+  0.0,  // pitch_acc 暂时关闭
   static_cast<uint8_t>(command.armor_id),
   command.vx,
   command.vy,
