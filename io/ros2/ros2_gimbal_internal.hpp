@@ -1,6 +1,8 @@
 #ifndef IO__ROS2_GIMBAL_INTERNAL_HPP
 #define IO__ROS2_GIMBAL_INTERNAL_HPP
 
+#include <Eigen/Geometry>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -10,6 +12,15 @@
 
 namespace io::detail
 {
+inline Eigen::Quaterniond align_imu_world_yaw(
+  const Eigen::Quaterniond & q, double world_yaw_offset_rad)
+{
+  Eigen::Quaterniond aligned =
+    Eigen::AngleAxisd(world_yaw_offset_rad, Eigen::Vector3d::UnitZ()) * q.normalized();
+  aligned.normalize();
+  return aligned;
+}
+
 template <typename Sample>
 double interpolate_big_yaw_rad(
   std::chrono::steady_clock::time_point timestamp, const Sample & a, const Sample & b)

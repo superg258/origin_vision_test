@@ -234,12 +234,18 @@ void ROS2Gimbal::send_mpc(
 ROS2Gimbal::ROS2Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
+  const auto ros2_gimbal_yaml = yaml["ros2_gimbal"];
+  if (ros2_gimbal_yaml && ros2_gimbal_yaml["imu_world_yaw_offset_deg"]) {
+    imu_world_yaw_offset_rad_ =
+      deg2rad(ros2_gimbal_yaml["imu_world_yaw_offset_deg"].as<double>());
+  }
   imu_query_offset_ = read_imu_query_offset(yaml);
   bridge_config_ = load_bridge_config(config_path);
 
   tools::logger()->info(
-    "[ROS2Gimbal] timing offset={:.2f}ms",
-    static_cast<double>(imu_query_offset_.count()) / 1000.0);
+    "[ROS2Gimbal] timing offset={:.2f}ms imu_world_yaw_offset={:.2f}deg",
+    static_cast<double>(imu_query_offset_.count()) / 1000.0,
+    rad2deg(imu_world_yaw_offset_rad_));
 
   if (!rclcpp::ok()) {
     rclcpp::init(0, nullptr);
@@ -384,7 +390,10 @@ void ROS2Gimbal::status_callback(const rm_interfaces::msg::Gimbal::SharedPtr msg
     if (!is_valid_quaternion(q)) {
       q = quaternion_from_deg_euler(yaw_deg, pitch_deg, roll_deg);
     } else {
-      q.normalize();
+      // The IMU and electrical controller use world frames whose yaw zero differs on the sentry.
+      // Left multiplication changes only the world-frame yaw zero and preserves the local
+      // pitch-yaw installation/coupling represented by the measured quaternion.
+      q = detail::align_imu_world_yaw(q, imu_world_yaw_offset_rad_);
     }
 
     const auto now = std::chrono::steady_clock::now();

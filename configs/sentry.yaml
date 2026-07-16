@@ -78,6 +78,8 @@ ros2_gimbal:
   node_name: "nav_gimbal_bridge"
   status_topic: "/serial/gimbal_status"
   cmd_topic: "/serial/process_gimbal"
+  # 实机 IMU 世界 yaw 比电控 yaw 零位大 180°；旋转 IMU 世界系后再做解算，统一 small/big yaw 坐标。
+  imu_world_yaw_offset_deg: -180.0
   # [[deprecated(cyclonedds)]] typed messages no longer need type name strings
   # status_msg_type: "rm_interfaces/msg/Gimbal"
   # cmd_msg_type: "rm_interfaces/msg/GimbalCmd"

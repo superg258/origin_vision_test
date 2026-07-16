@@ -111,6 +111,8 @@ private:
   double pitch_vel_ = 0.0;
   double bullet_speed_ = 23.0;
   double big_yaw_ = 0.0;
+  // Rotates the IMU absolute-world frame into the electrical-control yaw frame.
+  double imu_world_yaw_offset_rad_ = 0.0;
 
   BridgeConfig bridge_config_;
   std::chrono::microseconds imu_query_offset_{-1000};

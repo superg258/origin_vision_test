@@ -31,6 +31,23 @@ int main()
   const auto t0 = std::chrono::steady_clock::now();
 
   {
+    constexpr double pi = 3.14159265358979323846;
+    const Eigen::Quaterniond imu_q(
+      0.9742416143417358, 0.013855814933776855, -0.03302204608917236,
+      0.2219984531402588);
+    const Eigen::Quaterniond aligned = io::detail::align_imu_world_yaw(imu_q, -pi);
+    const double aligned_yaw = std::atan2(
+      2.0 * (aligned.w() * aligned.z() + aligned.x() * aligned.y()),
+      1.0 - 2.0 * (aligned.y() * aligned.y() + aligned.z() * aligned.z()));
+    const double aligned_yaw_deg = aligned_yaw * 180.0 / pi;
+    if (!expect_near(
+          aligned_yaw_deg, -154.35476684570312, 0.1,
+          "IMU world yaw offset should align quaternion yaw with electrical yaw")) {
+      return 1;
+    }
+  }
+
+  {
     bool has_prev = true;
     Sample prev{t0, 0.0};
     Sample ahead{t0 + 10ms, 1.0};
