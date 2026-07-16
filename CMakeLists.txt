@@ -144,6 +144,11 @@ target_link_libraries(pattern_geometry_test ${OpenCV_LIBS})
 add_executable(gimbal_axis_order_test tests/gimbal_axis_order_test.cpp)
 target_link_libraries(gimbal_axis_order_test ${OpenCV_LIBS} fmt::fmt tools)
 
+add_executable(shooter_logic_test tests/shooter_logic_test.cpp)
+
+add_executable(sentry_yaw_control_test tests/sentry_yaw_control_test.cpp)
+target_link_libraries(sentry_yaw_control_test ${OpenCV_LIBS} fmt::fmt tools)
+
 add_executable(armor_type_logic_test tests/armor_type_logic_test.cpp)
 target_link_libraries(armor_type_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 

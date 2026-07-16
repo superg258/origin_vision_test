@@ -7,6 +7,7 @@
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tasks/auto_aim/shooter_logic.hpp"
 
 namespace auto_aim
 {
@@ -21,7 +22,8 @@ double outpost_aim_phase_abs(const auto_aim::Target & target, const auto_aim::Ai
 }  // namespace
 
 Shooter::Shooter(const std::string & config_path)
-: last_command_{false, false, 0, 0}, high_spin_force_fire_active_{false}
+: last_command_{false, false, 0, 0}, high_spin_force_fire_active_{false},
+  has_last_command_{false}
 {
   auto yaml = YAML::LoadFile(config_path);
   first_tolerance_ = yaml["first_tolerance"].as<double>() / 57.3;    // degree to rad
@@ -45,6 +47,7 @@ bool Shooter::shoot(
 {
   if (!command.control || targets.empty() || !auto_fire_) {
     high_spin_force_fire_active_ = false;
+    has_last_command_ = false;
     return false;
   }
 
@@ -57,12 +60,14 @@ bool Shooter::shoot(
     if ((outpost_fire_require_locked_ && !locked) || !aim_locked) {
       high_spin_force_fire_active_ = false;
       last_command_ = command;
+      has_last_command_ = true;
       return false;
     }
 
     if (outpost_aim_phase_abs(target, aimer) > outpost_fire_max_angle_) {
       high_spin_force_fire_active_ = false;
       last_command_ = command;
+      has_last_command_ = true;
       return false;
     }
   }
@@ -75,27 +80,20 @@ bool Shooter::shoot(
     high_spin_force_fire_active_ = true;
   }
 
-  if (high_spin_force_fire_active_) {
-    last_command_ = command;
-    return true;
-  }
-
   auto target_x = target.ekf_x()[0];
   auto target_y = target.ekf_x()[2];
   auto tolerance = std::sqrt(tools::square(target_x) + tools::square(target_y)) > judge_distance_
                      ? second_tolerance_
                      : first_tolerance_;
-  // tools::logger()->debug("d(command.yaw) is {:.4f}", std::abs(last_command_.yaw - command.yaw));
-  if (
-    std::abs(last_command_.yaw - command.yaw) < tolerance * 2 &&  //此时认为command突变不应该射击
-    std::abs(gimbal_pos[0] - last_command_.yaw) < tolerance &&    //应该减去上一次command的yaw值
-    aimer.debug_aim_point.valid) {
-    last_command_ = command;
-    return true;
-  }
-
+  const bool aligned = shooter_logic::aim_is_aligned(
+    command, gimbal_pos[0], gimbal_pos[1], tolerance, tolerance);
+  const bool stable =
+    has_last_command_ &&
+    shooter_logic::command_is_stable(command, last_command_, tolerance, tolerance);
+  const bool should_fire = aim_locked && aligned && (high_spin_force_fire_active_ || stable);
   last_command_ = command;
-  return false;
+  has_last_command_ = true;
+  return should_fire;
 }
 
 }  // namespace auto_aim

@@ -24,6 +24,7 @@
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
+#include "tasks/auto_aim/sentry_yaw_control.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -304,103 +305,16 @@ double nearest_continuous_yaw_rad(double wrapped_yaw_rad, double reference_yaw_r
   return reference_yaw_rad + tools::limit_rad(wrapped_yaw_rad - reference_yaw_rad);
 }
 
-double target_center_big_yaw_rad(
-  const auto_aim::Target & target,
-  double current_big_yaw_rad,
-  double current_world_yaw_rad)
-{
-  const auto & ekf_x = target.ekf_x();
-
-  // 目标中心在世界坐标系中的绝对 yaw
-  const double target_world_yaw_rad =
-    std::atan2(ekf_x[2], ekf_x[0]);
-
-  // 只计算目标相对于当前枪口世界姿态的最短角增量
-  const double world_yaw_error_rad =
-    tools::limit_rad(
-      target_world_yaw_rad - current_world_yaw_rad);
-
-  // 将世界角增量叠加到电控大 yaw 编码器当前值上
-  // 不再混用世界绝对 yaw 和大 yaw 编码器绝对角
-  return current_big_yaw_rad + world_yaw_error_rad;
-}
-
-bool is_unlocked_outpost_target(const auto_aim::Target & target)
-{
-  return target.name == auto_aim::ArmorName::outpost && !target.outpost_layer_locked();
-}
-
 void apply_sentry_tracking_yaws(
   io::Command & command,
   const auto_aim::Target & target,
-  double current_big_yaw_rad,
-  double current_small_yaw_rad,
-  double current_world_yaw_rad,
-  tools::GimbalAxisOrder gimbal_axis_order)
+  double current_big_yaw_rad)
 {
   if (!command.control) return;
-
-  // 1. 大 yaw 跟踪敌方旋转中心
   const auto & x = target.ekf_x();
-
-  const double center_world_yaw_rad =
-    std::atan2(x[2], x[0]);
-
-  const double center_yaw_error_rad =
-    tools::limit_rad(
-      center_world_yaw_rad -
-      current_world_yaw_rad);
-
-  if (is_unlocked_outpost_target(target)) {
-    command.big_yaw = current_big_yaw_rad;
-  } else {
-    // 只把世界角增量叠加到当前大 yaw 编码器反馈
-    command.big_yaw =
-      current_big_yaw_rad +
-      center_yaw_error_rad;
-  }
-
-  // 2. 小 yaw 跟踪 Aimer 最终选中的装甲板
-  // command.yaw / command.pitch 是 Aimer 已计算好的命令，
-  // 反解成世界方向，避免 pitch_yaw 的等价180°角分支。
-  const Eigen::Vector3d armor_world_direction =
-    tools::gimbal_direction_from_command(
-      command.yaw,
-      command.pitch,
-      gimbal_axis_order);
-
-  const double armor_world_yaw_rad =
-    std::atan2(
-      armor_world_direction.y(),
-      armor_world_direction.x());
-
-  const double armor_yaw_error_rad =
-    tools::limit_rad(
-      armor_world_yaw_rad -
-      current_world_yaw_rad);
-
-  // 小 yaw 独立跟装甲板，不减 big yaw，也不把 small yaw 加给 big yaw
-  command.small_yaw =
-    current_small_yaw_rad +
-    armor_yaw_error_rad;
-
-  command.has_target_yaw = true;
-
-  tools::logger()->warn(
-    "[Yaw180Fix] "
-    "world={:.2f}, center={:.2f}, armor={:.2f}, "
-    "center_err={:.2f}, armor_err={:.2f}, "
-    "big_now={:.2f}, big_cmd={:.2f}, "
-    "small_now={:.2f}, small_cmd={:.2f}",
-    current_world_yaw_rad * 180.0 / M_PI,
-    center_world_yaw_rad * 180.0 / M_PI,
-    armor_world_yaw_rad * 180.0 / M_PI,
-    center_yaw_error_rad * 180.0 / M_PI,
-    armor_yaw_error_rad * 180.0 / M_PI,
-    current_big_yaw_rad * 180.0 / M_PI,
-    command.big_yaw * 180.0 / M_PI,
-    current_small_yaw_rad * 180.0 / M_PI,
-    command.small_yaw * 180.0 / M_PI);
+  const double center_world_yaw = std::atan2(x[2], x[0]);
+  auto_aim::sentry_yaw_control::apply(
+    command, center_world_yaw, current_big_yaw_rad, false);
 }
 
 void apply_abs_yaw_target(
@@ -738,6 +652,7 @@ int main(int argc, char * argv[])
     double omni_retarget_remaining_ms = 0.0;
     const auto now = std::chrono::steady_clock::now();
     io::Command command{false, false, 0.0, 0.0};
+    std::optional<auto_aim::Plan> main_mpc_plan;
     std::optional<auto_buff::PowerRune> buff_power_runes;
     bool buff_target_solved = false;
     double buff_detect_time_ms = 0.0;
@@ -1002,168 +917,34 @@ int main(int argc, char * argv[])
       back_img.release();
       clear_omni_redirect_state();
 
-      command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
-      if (command.control && !targets.empty()) {
-    apply_sentry_tracking_yaws(
-  command,
-  targets.front(),
-  gimbal_state.big_yaw,
-  gimbal_state.yaw,
-  ypr[0],
-  gimbal_axis_order);
+      // Aimer 仅保留选板状态和可视化信息；实际控制角、速度和加速度全部来自 MPC。
+      (void)aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+
+      auto_aim::Plan mpc_plan{false};
+      if (!targets.empty()) {
+        mpc_plan = planner.plan(targets.front(), gimbal->bullet_speed());
+        main_mpc_plan = mpc_plan;
       }
+
+      if (mpc_plan.control && !targets.empty()) {
+        command = {true, false, mpc_plan.yaw, mpc_plan.pitch};
+        apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+      }
+
       const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
-      command.shoot =
+      const bool shooter_ready =
         shooter.shoot(command, aimer, targets, motor_ypr, tracker_state == "tracking");
+      command.shoot = mpc_plan.control && mpc_plan.fire && shooter_ready;
       fill_nav_target_info(command, targets);
 
-      const bool unlocked_outpost =
-        !targets.empty() && is_unlocked_outpost_target(targets.front());
-     double small_yaw_vel = 0.0;
-double pitch_vel = 0.0;
-double small_yaw_acc = 0.0;
-double pitch_acc = 0.0;
+      const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
+      const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
 
-// if (command.control && !targets.empty() && !unlocked_outpost) {
-//   const auto mpc_plan =
-//     planner.plan(targets.front(), gimbal->bullet_speed());
-
-//   if (mpc_plan.control) {
-//     // yaw 前馈暂时保留
-//     small_yaw_vel = mpc_plan.yaw_vel;
-//     small_yaw_acc = mpc_plan.yaw_acc;
-
-//     // 关键：关闭 pitch 速度和加速度前馈
-//     pitch_vel = 0.0;
-//     pitch_acc = 0.0;
-//   }
-// }
-
-const double big_yaw =
-  command.has_target_yaw ? command.big_yaw : command.yaw;
-
-const double small_yaw =
-  command.has_target_yaw ? command.small_yaw : command.yaw;
-
-// Aimer 每一帧给出的原始 pitch 目标
-const double raw_pitch = command.pitch;
-
-// 动态 pitch 滤波状态
-static bool pitch_filter_initialized = false;
-static double filtered_pitch = 0.0;
-static uint8_t last_pitch_armor_id = 0;
-static auto last_pitch_time = std::chrono::steady_clock::now();
-
-const auto pitch_now_time = std::chrono::steady_clock::now();
-double pitch_to_send = gimbal_state.pitch;
-
-if (!command.control || !std::isfinite(raw_pitch)) {
-  // 丢失目标后重置，下一次从当前云台姿态开始
-  pitch_filter_initialized = false;
-  last_pitch_armor_id = 0;
-  last_pitch_time = pitch_now_time;
-} else {
-  double dt = std::chrono::duration<double>(
-    pitch_now_time - last_pitch_time).count();
-
-  // 防止首帧、卡顿等导致异常步长
-  dt = std::clamp(dt, 0.001, 0.05);
-  last_pitch_time = pitch_now_time;
-
-  const bool target_changed =
-    last_pitch_armor_id != 0 &&
-    command.armor_id != 0 &&
-    command.armor_id != last_pitch_armor_id;
-
-  if (!pitch_filter_initialized || target_changed) {
-    // 从实际反馈角开始，不让第一次识别时突然跳转
-    filtered_pitch = gimbal_state.pitch;
-    pitch_filter_initialized = true;
-  }
-
-  if (command.armor_id != 0) {
-    last_pitch_armor_id = command.armor_id;
-  }
-
-  // 原始目标相对于滤波目标的误差
-  double pitch_delta = raw_pitch - filtered_pitch;
-
-  // 小于0.15°的抖动忽略
-  constexpr double pitch_deadband =
-    0.15 * M_PI / 180.0;
-
-  if (std::abs(pitch_delta) < pitch_deadband) {
-    pitch_delta = 0.0;
-  }
-
-  // 一阶低通时间常数，越大越平滑但响应越慢
-  constexpr double pitch_filter_tau = 0.12;
-
-  const double alpha =
-    1.0 - std::exp(-dt / pitch_filter_tau);
-
-  const double filtered_step =
-    alpha * pitch_delta;
-
-  // pitch 最大跟踪速度：35°/s
-  constexpr double max_pitch_rate =
-    35.0 * M_PI / 180.0;
-
-  const double max_pitch_step =
-    max_pitch_rate * dt;
-
-  filtered_pitch += std::clamp(
-    filtered_step,
-    -max_pitch_step,
-    max_pitch_step);
-
-  pitch_to_send = filtered_pitch;
-}
-
-
-
-if (command.control && frame_count % 10 == 0) {
-  const double raw_aim_pitch_deg =
-    command.pitch * 180.0 / M_PI;
-
-  // 这里必须使用真正传给 send_mpc 的变量
-  const double send_internal_pitch_deg =
-    pitch_to_send * 180.0 / M_PI;
-
-  // ros2_gimbal.cpp 发送时会再次取负
-  const double send_ec_pitch_deg =
-    -pitch_to_send * 180.0 / M_PI;
-
-  const double feedback_internal_pitch_deg =
-    gimbal_state.pitch * 180.0 / M_PI;
-
-  tools::logger()->warn(
-    "[PitchFlow] "
-    "aim_raw={:.2f}, "
-    "send_internal={:.2f}, send_ec={:.2f}, "
-    "feedback_internal={:.2f}, "
-    "internal_error={:.2f}",
-    raw_aim_pitch_deg,
-    send_internal_pitch_deg,
-    send_ec_pitch_deg,
-    feedback_internal_pitch_deg,
-    (pitch_to_send - gimbal_state.pitch) * 180.0 / M_PI);
-}
-gimbal->send_mpc(
-  command.control,
-  command.shoot,
-  big_yaw,
-  small_yaw,
-  pitch_to_send,
-  small_yaw_vel,
-  0.0,  // pitch_vel 暂时关闭
-  small_yaw_acc,
-  0.0,  // pitch_acc 暂时关闭
-  static_cast<uint8_t>(command.armor_id),
-  command.vx,
-  command.vy,
-  command.horizon_distance);
-}
+      gimbal->send_mpc(
+        command.control, command.shoot, big_yaw, small_yaw, command.pitch, mpc_plan.yaw_vel,
+        mpc_plan.pitch_vel, mpc_plan.yaw_acc, mpc_plan.pitch_acc,
+        static_cast<uint8_t>(command.armor_id), command.vx, command.vy, command.horizon_distance);
+    }
 
     nlohmann::json data;
     data["mode"] = buff_mode ? 2 : (omni_mode ? 1 : 0);
@@ -1179,6 +960,15 @@ gimbal->send_mpc(
     data["mpc_fire"] = command.shoot ? 1 : 0;
     data["mpc_yaw"] = (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3;
     data["mpc_pitch"] = command.pitch * 57.3;
+    if (main_mpc_plan.has_value()) {
+      data["mpc_target_yaw"] = main_mpc_plan->target_yaw * 57.3;
+      data["mpc_target_pitch"] = main_mpc_plan->target_pitch * 57.3;
+      data["mpc_yaw_vel"] = main_mpc_plan->yaw_vel * 57.3;
+      data["mpc_pitch_vel"] = main_mpc_plan->pitch_vel * 57.3;
+      data["mpc_yaw_acc"] = main_mpc_plan->yaw_acc * 57.3;
+      data["mpc_pitch_acc"] = main_mpc_plan->pitch_acc * 57.3;
+      data["mpc_plan_fire"] = main_mpc_plan->fire ? 1 : 0;
+    }
     data["target_armor_id"] = static_cast<int>(command.armor_id);
     data["target_vx"] = command.vx;
     data["target_vy"] = command.vy;
