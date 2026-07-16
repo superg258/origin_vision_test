@@ -78,7 +78,9 @@ ros2_gimbal:
   node_name: "nav_gimbal_bridge"
   status_topic: "/serial/gimbal_status"
   cmd_topic: "/serial/process_gimbal"
-  # 状态消息兼容旧格式；若电控在末尾追加 float32 gimbal_big_yaw(deg, 连续角)，ovsentry_omni 会优先使用它作为 omni 基准 yaw。
+  # 实机 IMU 世界 yaw 比电控 yaw 零位大 180°；旋转 IMU 世界系后再做解算，统一 small/big yaw 坐标。
+  imu_world_yaw_offset_deg: -180.0
+  # Gimbal 状态中的 big_yaw 位于 yaw 与 mode 之间，角度单位为 degree。
   status_msg_type: "rm_interfaces/msg/Gimbal"
   cmd_msg_type: "rm_interfaces/msg/GimbalCmd"
 

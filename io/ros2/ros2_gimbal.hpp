@@ -102,6 +102,8 @@ private:
   double pitch_vel_ = 0.0;
   double bullet_speed_ = 23.0;
   double big_yaw_ = 0.0;
+  // Rotates the IMU absolute-world frame into the electrical-control yaw frame.
+  double imu_world_yaw_offset_rad_ = 0.0;
   tools::GimbalAxisOrder gimbal_axis_order_{tools::GimbalAxisOrder::yaw_pitch};
 
   BridgeConfig bridge_config_;
