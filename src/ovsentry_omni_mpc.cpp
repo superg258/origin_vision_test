@@ -24,6 +24,7 @@
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
+#include "tasks/auto_aim/sentry_mpc_transform.hpp"
 #include "tasks/auto_aim/sentry_yaw_control.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
@@ -653,6 +654,7 @@ int main(int argc, char * argv[])
     const auto now = std::chrono::steady_clock::now();
     io::Command command{false, false, 0.0, 0.0};
     std::optional<auto_aim::Plan> main_mpc_plan;
+    std::optional<auto_aim::sentry_mpc_transform::JointTrajectory> main_local_mpc_plan;
     std::optional<auto_buff::PowerRune> buff_power_runes;
     bool buff_target_solved = false;
     double buff_detect_time_ms = 0.0;
@@ -927,7 +929,16 @@ int main(int argc, char * argv[])
       }
 
       if (mpc_plan.control && !targets.empty()) {
-        command = {true, false, mpc_plan.yaw, mpc_plan.pitch};
+        const auto & target_x = targets.front().ekf_x();
+        const auto big_yaw_motion = auto_aim::sentry_mpc_transform::center_yaw_motion(
+          target_x[0], target_x[2], target_x[1], target_x[3]);
+        const auto local_mpc_plan = auto_aim::sentry_mpc_transform::to_big_yaw_local(
+          {mpc_plan.yaw, mpc_plan.pitch, mpc_plan.yaw_vel, mpc_plan.pitch_vel,
+           mpc_plan.yaw_acc, mpc_plan.pitch_acc},
+          big_yaw_motion, gimbal_axis_order, auto_aim::DT);
+        main_local_mpc_plan = local_mpc_plan;
+
+        command = {true, false, local_mpc_plan.yaw, local_mpc_plan.pitch};
         apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
       }
 
@@ -939,10 +950,12 @@ int main(int argc, char * argv[])
 
       const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
       const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
+      const auto local_plan = main_local_mpc_plan.value_or(
+        auto_aim::sentry_mpc_transform::JointTrajectory{});
 
       gimbal->send_mpc(
-        command.control, command.shoot, big_yaw, small_yaw, command.pitch, mpc_plan.yaw_vel,
-        mpc_plan.pitch_vel, mpc_plan.yaw_acc, mpc_plan.pitch_acc,
+        command.control, command.shoot, big_yaw, small_yaw, command.pitch, local_plan.yaw_vel,
+        local_plan.pitch_vel, local_plan.yaw_acc, local_plan.pitch_acc,
         static_cast<uint8_t>(command.armor_id), command.vx, command.vy, command.horizon_distance);
     }
 
@@ -968,6 +981,12 @@ int main(int argc, char * argv[])
       data["mpc_yaw_acc"] = main_mpc_plan->yaw_acc * 57.3;
       data["mpc_pitch_acc"] = main_mpc_plan->pitch_acc * 57.3;
       data["mpc_plan_fire"] = main_mpc_plan->fire ? 1 : 0;
+    }
+    if (main_local_mpc_plan.has_value()) {
+      data["mpc_local_small_yaw"] = main_local_mpc_plan->yaw * 57.3;
+      data["mpc_local_pitch"] = main_local_mpc_plan->pitch * 57.3;
+      data["mpc_local_yaw_vel"] = main_local_mpc_plan->yaw_vel * 57.3;
+      data["mpc_local_pitch_vel"] = main_local_mpc_plan->pitch_vel * 57.3;
     }
     data["target_armor_id"] = static_cast<int>(command.armor_id);
     data["target_vx"] = command.vx;

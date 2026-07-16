@@ -149,6 +149,9 @@ add_executable(shooter_logic_test tests/shooter_logic_test.cpp)
 add_executable(sentry_yaw_control_test tests/sentry_yaw_control_test.cpp)
 target_link_libraries(sentry_yaw_control_test ${OpenCV_LIBS} fmt::fmt tools)
 
+add_executable(sentry_mpc_transform_test tests/sentry_mpc_transform_test.cpp)
+target_link_libraries(sentry_mpc_transform_test ${OpenCV_LIBS} fmt::fmt tools)
+
 add_executable(armor_type_logic_test tests/armor_type_logic_test.cpp)
 target_link_libraries(armor_type_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
