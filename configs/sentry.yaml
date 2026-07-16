@@ -11,6 +11,7 @@ yolov5_model_path: assets/yolov5_0526.xml
 device: CPU
 auto_aim_device: CPU
 omni_device: CPU
+classifier_device: CPU
 min_confidence: 0.8
 use_traditional: true
 
