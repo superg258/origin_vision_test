@@ -19,16 +19,23 @@ using Trajectory = Eigen::Matrix<double, 4, HORIZON>;  // yaw, yaw_vel, pitch, p
 
 struct Plan
 {
-  bool control;
-  bool fire;
-  float target_yaw;
-  float target_pitch;
-  float yaw;
-  float yaw_vel;
-  float yaw_acc;
-  float pitch;
-  float pitch_vel;
-  float pitch_acc;
+  bool control = false;
+  bool fire = false;
+  float target_yaw = 0.0F;
+  float target_pitch = 0.0F;
+  float yaw = 0.0F;
+  float yaw_vel = 0.0F;
+  float yaw_acc = 0.0F;
+  float pitch = 0.0F;
+  float pitch_vel = 0.0F;
+  float pitch_acc = 0.0F;
+};
+
+struct SentryPlan
+{
+  // yaw is the world-referenced small-yaw command; pitch is the physical outer-pitch joint.
+  Plan world_small_yaw_plan{};
+  double big_yaw = 0.0;
 };
 
 class Planner
@@ -39,6 +46,7 @@ public:
 
   Plan plan(Target target, double bullet_speed);
   Plan plan(std::optional<Target> target, double bullet_speed);
+  SentryPlan plan_sentry_world(Target target, double bullet_speed);
 
 private:
   double yaw_offset_;
@@ -53,8 +61,12 @@ private:
   void setup_yaw_solver(const std::string & config_path);
   void setup_pitch_solver(const std::string & config_path);
 
-  Eigen::Matrix<double, 2, 1> aim(const Target & target, double bullet_speed);
-  Trajectory get_trajectory(Target & target, double yaw0, double bullet_speed);
+  Plan plan_impl(
+    Target target, double bullet_speed, bool sentry_world, double * sentry_big_yaw);
+  Eigen::Matrix<double, 2, 1> aim(
+    const Target & target, double bullet_speed, bool sentry_world);
+  Trajectory get_trajectory(
+    Target & target, double yaw0, double bullet_speed, bool sentry_world);
 };
 
 }  // namespace auto_aim

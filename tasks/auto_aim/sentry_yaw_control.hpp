@@ -23,7 +23,7 @@ inline void apply(
 {
   if (!command.control) return;
 
-  // command.yaw 是 MPC 按云台轴序求得的小 yaw 关节目标。
+  // command.yaw 是电控所需的世界系小 yaw 目标，不是相对 big yaw 的局部残差。
   command.small_yaw = command.yaw;
 
   // 大 yaw 只跟踪旋转中心，并保持连续角。

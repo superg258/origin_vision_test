@@ -27,6 +27,54 @@ struct YawMotion
   double acceleration = 0.0;
 };
 
+// The electrical small-yaw controller uses a world-referenced yaw target, while pitch is the
+// physical outer joint. Keep those two command semantics explicit instead of treating small yaw
+// as the inner joint angle.
+struct WorldSmallYawCommand
+{
+  double small_yaw = 0.0;
+  double pitch = 0.0;
+};
+
+inline Eigen::Vector2d world_direction_to_big_yaw_local(
+  const Eigen::Vector3d & world_direction, double big_yaw,
+  tools::GimbalAxisOrder local_axis_order)
+{
+  const Eigen::Vector3d local_direction =
+    Eigen::AngleAxisd(-big_yaw, Eigen::Vector3d::UnitZ()) * world_direction;
+  return tools::gimbal_command_from_direction(local_direction, local_axis_order);
+}
+
+inline Eigen::Vector2d world_yaw_elevation_to_big_yaw_local(
+  double world_yaw, double elevation, double big_yaw,
+  tools::GimbalAxisOrder local_axis_order)
+{
+  const double cos_elevation = std::cos(elevation);
+  const Eigen::Vector3d world_direction{
+    cos_elevation * std::cos(world_yaw), cos_elevation * std::sin(world_yaw),
+    std::sin(elevation)};
+  return world_direction_to_big_yaw_local(world_direction, big_yaw, local_axis_order);
+}
+
+inline WorldSmallYawCommand world_direction_to_world_small_yaw_command(
+  const Eigen::Vector3d & world_direction, double big_yaw,
+  tools::GimbalAxisOrder local_axis_order)
+{
+  const Eigen::Vector2d local_command =
+    world_direction_to_big_yaw_local(world_direction, big_yaw, local_axis_order);
+  return {std::atan2(world_direction.y(), world_direction.x()), local_command[1]};
+}
+
+inline WorldSmallYawCommand world_yaw_elevation_to_world_small_yaw_command(
+  double world_yaw, double elevation, double big_yaw,
+  tools::GimbalAxisOrder local_axis_order)
+{
+  const Eigen::Vector2d local_command =
+    world_yaw_elevation_to_big_yaw_local(
+      world_yaw, elevation, big_yaw, local_axis_order);
+  return {world_yaw, local_command[1]};
+}
+
 inline YawMotion center_yaw_motion(double x, double y, double vx, double vy)
 {
   YawMotion motion;
@@ -56,9 +104,7 @@ inline Eigen::Vector2d local_command_at(
 
   const Eigen::Vector3d world_direction =
     tools::gimbal_direction_from_command(world_yaw, world_pitch, axis_order);
-  const Eigen::Vector3d local_direction =
-    Eigen::AngleAxisd(-big_yaw_angle, Eigen::Vector3d::UnitZ()) * world_direction;
-  return tools::gimbal_command_from_direction(local_direction, axis_order);
+  return world_direction_to_big_yaw_local(world_direction, big_yaw_angle, axis_order);
 }
 
 inline JointTrajectory to_big_yaw_local(

@@ -1,10 +1,12 @@
 #include "planner.hpp"
 
+#include <utility>
 #include <vector>
 
 #include "tools/math_tools.hpp"
 #include "tools/trajectory.hpp"
 #include "tools/yaml.hpp"
+#include "tasks/auto_aim/sentry_mpc_transform.hpp"
 
 using namespace std::chrono_literals;
 
@@ -30,6 +32,20 @@ Planner::Planner(const std::string & config_path)
 
 Plan Planner::plan(Target target, double bullet_speed)
 {
+  return plan_impl(std::move(target), bullet_speed, false, nullptr);
+}
+
+SentryPlan Planner::plan_sentry_world(Target target, double bullet_speed)
+{
+  SentryPlan sentry_plan;
+  sentry_plan.world_small_yaw_plan =
+    plan_impl(std::move(target), bullet_speed, true, &sentry_plan.big_yaw);
+  return sentry_plan;
+}
+
+Plan Planner::plan_impl(
+  Target target, double bullet_speed, bool sentry_world, double * sentry_big_yaw)
+{
   // 0. Check bullet speed
   if (bullet_speed < 10 || bullet_speed > 25) {
     bullet_speed = 22;
@@ -48,12 +64,17 @@ Plan Planner::plan(Target target, double bullet_speed)
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
   target.predict(bullet_traj.fly_time);
 
+  if (sentry_world && sentry_big_yaw != nullptr) {
+    const auto & x = target.ekf_x();
+    *sentry_big_yaw = std::atan2(x[2], x[0]);
+  }
+
   // 2. Get trajectory
   double yaw0;
   Trajectory traj;
   try {
-    yaw0 = aim(target, bullet_speed)(0);
-    traj = get_trajectory(target, yaw0, bullet_speed);
+    yaw0 = aim(target, bullet_speed, sentry_world)(0);
+    traj = get_trajectory(target, yaw0, bullet_speed, sentry_world);
   } catch (const std::exception & e) {
     tools::logger()->warn("Unsolvable target {:.2f}", bullet_speed);
     return {false};
@@ -157,7 +178,8 @@ void Planner::setup_pitch_solver(const std::string & config_path)
   pitch_solver_->settings->max_iter = 10;
 }
 
-Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_speed)
+Eigen::Matrix<double, 2, 1> Planner::aim(
+  const Target & target, double bullet_speed, bool sentry_world)
 {
   Eigen::Vector3d xyz;
   double yaw;
@@ -177,23 +199,34 @@ Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_sp
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
   if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
 
-  return tools::gimbal_command_from_yaw_elevation(
-    azim + yaw_offset_, bullet_traj.pitch + pitch_offset_, gimbal_axis_order_);
+  const double world_yaw = azim + yaw_offset_;
+  const double elevation = bullet_traj.pitch + pitch_offset_;
+  if (sentry_world) {
+    const auto & x = target.ekf_x();
+    const double big_yaw = std::atan2(x[2], x[0]);
+    const auto command =
+      sentry_mpc_transform::world_yaw_elevation_to_world_small_yaw_command(
+        world_yaw, elevation, big_yaw, gimbal_axis_order_);
+    return {command.small_yaw, command.pitch};
+  }
+
+  return tools::gimbal_command_from_yaw_elevation(world_yaw, elevation, gimbal_axis_order_);
 }
 
-Trajectory Planner::get_trajectory(Target & target, double yaw0, double bullet_speed)
+Trajectory Planner::get_trajectory(
+  Target & target, double yaw0, double bullet_speed, bool sentry_world)
 {
   Trajectory traj;
 
   target.predict(-DT * (HALF_HORIZON + 1));
-  auto yaw_pitch_last = aim(target, bullet_speed);
+  auto yaw_pitch_last = aim(target, bullet_speed, sentry_world);
 
   target.predict(DT);  // [0] = -HALF_HORIZON * DT -> [HHALF_HORIZON] = 0
-  auto yaw_pitch = aim(target, bullet_speed);
+  auto yaw_pitch = aim(target, bullet_speed, sentry_world);
 
   for (int i = 0; i < HORIZON; i++) {
     target.predict(DT);
-    auto yaw_pitch_next = aim(target, bullet_speed);
+    auto yaw_pitch_next = aim(target, bullet_speed, sentry_world);
 
     auto yaw_vel = tools::limit_rad(yaw_pitch_next(0) - yaw_pitch_last(0)) / (2 * DT);
     auto pitch_vel = (yaw_pitch_next(1) - yaw_pitch_last(1)) / (2 * DT);

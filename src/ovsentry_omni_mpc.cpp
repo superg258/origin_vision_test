@@ -306,28 +306,32 @@ double nearest_continuous_yaw_rad(double wrapped_yaw_rad, double reference_yaw_r
   return reference_yaw_rad + tools::limit_rad(wrapped_yaw_rad - reference_yaw_rad);
 }
 
-void apply_sentry_tracking_yaws(
-  io::Command & command,
-  const auto_aim::Target & target,
-  double current_big_yaw_rad)
-{
-  if (!command.control) return;
-  const auto & x = target.ekf_x();
-  const double center_world_yaw = std::atan2(x[2], x[0]);
-  auto_aim::sentry_yaw_control::apply(
-    command, center_world_yaw, current_big_yaw_rad, false);
-}
-
 void apply_abs_yaw_target(
   io::Command & command, double abs_yaw_rad, double elevation_rad,
   tools::GimbalAxisOrder gimbal_axis_order)
 {
   command.control = true;
-  const auto yaw_pitch =
-    tools::gimbal_command_from_yaw_elevation(abs_yaw_rad, elevation_rad, gimbal_axis_order);
-  command.yaw = yaw_pitch[0];
-  command.pitch = yaw_pitch[1];
+  const auto sentry_command =
+    auto_aim::sentry_mpc_transform::world_yaw_elevation_to_world_small_yaw_command(
+      abs_yaw_rad, elevation_rad, abs_yaw_rad, gimbal_axis_order);
+  command.yaw = sentry_command.small_yaw;
+  command.pitch = sentry_command.pitch;
   command.big_yaw = abs_yaw_rad;
+  command.small_yaw = command.yaw;
+  command.has_target_yaw = true;
+}
+
+void apply_world_direction_target(
+  io::Command & command, const Eigen::Vector3d & world_direction, double big_yaw_rad,
+  double current_small_yaw_rad, tools::GimbalAxisOrder gimbal_axis_order)
+{
+  const auto sentry_command =
+    auto_aim::sentry_mpc_transform::world_direction_to_world_small_yaw_command(
+      world_direction, big_yaw_rad, gimbal_axis_order);
+  command.yaw = nearest_continuous_yaw_rad(
+    sentry_command.small_yaw, current_small_yaw_rad);
+  command.pitch = sentry_command.pitch;
+  command.big_yaw = big_yaw_rad;
   command.small_yaw = command.yaw;
   command.has_target_yaw = true;
 }
@@ -654,7 +658,6 @@ int main(int argc, char * argv[])
     const auto now = std::chrono::steady_clock::now();
     io::Command command{false, false, 0.0, 0.0};
     std::optional<auto_aim::Plan> main_mpc_plan;
-    std::optional<auto_aim::sentry_mpc_transform::JointTrajectory> main_local_mpc_plan;
     std::optional<auto_buff::PowerRune> buff_power_runes;
     bool buff_target_solved = false;
     double buff_detect_time_ms = 0.0;
@@ -719,8 +722,15 @@ int main(int argc, char * argv[])
       const auto buff_aim_end = std::chrono::steady_clock::now();
 
       if (command.control) {
-        const double continuous_yaw = nearest_continuous_yaw_rad(command.yaw, gimbal_state.big_yaw);
-        apply_abs_yaw_target(command, continuous_yaw, -command.pitch, gimbal_axis_order);
+        // BuffAimer returns a command in the configured mechanical axis order. Recover its world
+        // direction once, then emit a world-referenced small yaw plus the physical pitch joint.
+        const Eigen::Vector3d world_direction = tools::gimbal_direction_from_command(
+          command.yaw, command.pitch, gimbal_axis_order);
+        const double world_yaw = std::atan2(world_direction.y(), world_direction.x());
+        const double continuous_big_yaw =
+          nearest_continuous_yaw_rad(world_yaw, gimbal_state.big_yaw);
+        apply_world_direction_target(
+          command, world_direction, continuous_big_yaw, gimbal_state.yaw, gimbal_axis_order);
       }
 
       const double buff_big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
@@ -909,7 +919,10 @@ int main(int argc, char * argv[])
       }
 
       const double omni_big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
-      const double omni_small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
+      const double omni_small_yaw = command.has_target_yaw
+                                      ? nearest_continuous_yaw_rad(
+                                          command.small_yaw, gimbal_state.yaw)
+                                      : command.yaw;
       gimbal->send_mpc(
         command.control, command.shoot, omni_big_yaw, omni_small_yaw, command.pitch,
         0.0, 0.0, 0.0, 0.0, static_cast<uint8_t>(command.armor_id), 0.0, 0.0, 0.0);
@@ -923,23 +936,21 @@ int main(int argc, char * argv[])
       (void)aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
 
       auto_aim::Plan mpc_plan{false};
+      double mpc_big_yaw = 0.0;
       if (!targets.empty()) {
-        mpc_plan = planner.plan(targets.front(), gimbal->bullet_speed());
+        const auto sentry_plan =
+          planner.plan_sentry_world(targets.front(), gimbal->bullet_speed());
+        mpc_plan = sentry_plan.world_small_yaw_plan;
+        mpc_big_yaw = sentry_plan.big_yaw;
         main_mpc_plan = mpc_plan;
       }
 
       if (mpc_plan.control && !targets.empty()) {
-        const auto & target_x = targets.front().ekf_x();
-        const auto big_yaw_motion = auto_aim::sentry_mpc_transform::center_yaw_motion(
-          target_x[0], target_x[2], target_x[1], target_x[3]);
-        const auto local_mpc_plan = auto_aim::sentry_mpc_transform::to_big_yaw_local(
-          {mpc_plan.yaw, mpc_plan.pitch, mpc_plan.yaw_vel, mpc_plan.pitch_vel,
-           mpc_plan.yaw_acc, mpc_plan.pitch_acc},
-          big_yaw_motion, gimbal_axis_order, auto_aim::DT);
-        main_local_mpc_plan = local_mpc_plan;
-
-        command = {true, false, local_mpc_plan.yaw, local_mpc_plan.pitch};
-        apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+        const double continuous_small_yaw =
+          nearest_continuous_yaw_rad(mpc_plan.yaw, gimbal_state.yaw);
+        command = {true, false, continuous_small_yaw, mpc_plan.pitch};
+        auto_aim::sentry_yaw_control::apply(
+          command, mpc_big_yaw, gimbal_state.big_yaw, false);
       }
 
       const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
@@ -950,12 +961,10 @@ int main(int argc, char * argv[])
 
       const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
       const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
-      const auto local_plan = main_local_mpc_plan.value_or(
-        auto_aim::sentry_mpc_transform::JointTrajectory{});
 
       gimbal->send_mpc(
-        command.control, command.shoot, big_yaw, small_yaw, command.pitch, local_plan.yaw_vel,
-        local_plan.pitch_vel, local_plan.yaw_acc, local_plan.pitch_acc,
+        command.control, command.shoot, big_yaw, small_yaw, command.pitch, mpc_plan.yaw_vel,
+        mpc_plan.pitch_vel, mpc_plan.yaw_acc, mpc_plan.pitch_acc,
         static_cast<uint8_t>(command.armor_id), command.vx, command.vy, command.horizon_distance);
     }
 
@@ -981,12 +990,6 @@ int main(int argc, char * argv[])
       data["mpc_yaw_acc"] = main_mpc_plan->yaw_acc * 57.3;
       data["mpc_pitch_acc"] = main_mpc_plan->pitch_acc * 57.3;
       data["mpc_plan_fire"] = main_mpc_plan->fire ? 1 : 0;
-    }
-    if (main_local_mpc_plan.has_value()) {
-      data["mpc_local_small_yaw"] = main_local_mpc_plan->yaw * 57.3;
-      data["mpc_local_pitch"] = main_local_mpc_plan->pitch * 57.3;
-      data["mpc_local_yaw_vel"] = main_local_mpc_plan->yaw_vel * 57.3;
-      data["mpc_local_pitch_vel"] = main_local_mpc_plan->pitch_vel * 57.3;
     }
     data["target_armor_id"] = static_cast<int>(command.armor_id);
     data["target_vx"] = command.vx;
