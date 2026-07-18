@@ -10,7 +10,7 @@ yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/yolov5_0526.xml
 device: GPU
 auto_aim_device: GPU
-omni_device: NPU
+omni_device: GPU
 min_confidence: 0.8
 use_traditional: true
 
