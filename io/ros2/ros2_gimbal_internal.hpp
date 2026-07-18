@@ -6,12 +6,22 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 
 #include "tools/math_tools.hpp"
 
 namespace io::detail
 {
+inline bool status_timestamp_is_fresh(
+  bool timestamp_valid, std::size_t sample_count,
+  std::chrono::steady_clock::time_point received_at,
+  std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration max_age)
+{
+  if (!timestamp_valid || sample_count < 2 || now < received_at) return false;
+  return now - received_at <= max_age;
+}
+
 inline Eigen::Quaterniond align_imu_world_yaw(
   const Eigen::Quaterniond & q, double world_yaw_offset_rad)
 {

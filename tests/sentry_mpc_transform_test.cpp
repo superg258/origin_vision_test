@@ -66,6 +66,34 @@ int main()
   }
 
   {
+    const auto bottom =
+      auto_aim::sentry_mpc_transform::world_yaw_elevation_to_world_small_yaw_command(
+        armor_yaw, -10.0 * deg, center_yaw, axis_order);
+    const auto middle =
+      auto_aim::sentry_mpc_transform::world_yaw_elevation_to_world_small_yaw_command(
+        armor_yaw, 0.0, center_yaw, axis_order);
+    const auto top =
+      auto_aim::sentry_mpc_transform::world_yaw_elevation_to_world_small_yaw_command(
+        armor_yaw, 10.0 * deg, center_yaw, axis_order);
+
+    if (!expect(
+          bottom.pitch > middle.pitch && middle.pitch > top.pitch,
+          "raw image bottom-to-top motion must monotonically decrease internal physical pitch")) {
+      return 1;
+    }
+    if (!expect(
+          bottom.pitch > 0.0 && std::abs(middle.pitch) < 1e-12 && top.pitch < 0.0,
+          "pitch_yaw direction must be down=positive internal pitch and up=negative")) {
+      return 1;
+    }
+    if (!expect(
+          -bottom.pitch < 0.0 && -top.pitch > 0.0,
+          "EC pitch sign must command down for a bottom target and up for a top target")) {
+      return 1;
+    }
+  }
+
+  {
     const double buff_yaw = -40.0 * deg;
     const double buff_elevation = 12.0 * deg;
     const Eigen::Vector2d configured_axis_command =

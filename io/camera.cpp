@@ -1,6 +1,7 @@
 #include "camera.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 #include "hikrobot/hikrobot.hpp"
 #include "mindvision/mindvision.hpp"
@@ -31,10 +32,14 @@ Camera::Camera(const std::string & config_path)
   }
 }
 
+Camera::Camera(std::unique_ptr<CameraBase> camera) : camera_(std::move(camera))
+{
+  if (!camera_) throw std::invalid_argument("Camera backend must not be null");
+}
+
 void Camera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp)
 {
   camera_->read(img, timestamp);
-  cv::rotate(img,img,cv::ROTATE_180);
 }
 
 }  // namespace io

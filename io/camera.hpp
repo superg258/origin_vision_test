@@ -18,7 +18,8 @@ public:
 class Camera
 {
 public:
-  Camera(const std::string & config_path);
+  explicit Camera(const std::string & config_path);
+  explicit Camera(std::unique_ptr<CameraBase> camera);
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
 
 private:

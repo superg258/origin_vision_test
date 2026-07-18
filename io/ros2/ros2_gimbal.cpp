@@ -365,6 +365,8 @@ void ROS2Gimbal::status_callback(const std::shared_ptr<rclcpp::SerializedMessage
       std::lock_guard<std::mutex> lk(mtx_);
       latest_q_ = q;
       has_latest_q_ = true;
+      last_status_received_at_ = now;
+      has_status_timestamp_ = true;
       yaw_ = deg2rad(yaw_deg);
       pitch_ = internal_pitch_rad;
       yaw_vel_ = deg2rad(yaw_vel_deg);
@@ -469,6 +471,61 @@ Eigen::Quaterniond ROS2Gimbal::imu_at_image(std::chrono::steady_clock::time_poin
   return imu_at(image_timestamp + imu_query_offset_);
 }
 
+std::optional<Eigen::Quaterniond> ROS2Gimbal::try_imu_at(
+  std::chrono::steady_clock::time_point timestamp,
+  std::chrono::steady_clock::duration max_status_age)
+{
+  if (!prime_queue_if_ready()) return std::nullopt;
+  const auto status_age_limit =
+    std::max(max_status_age, std::chrono::steady_clock::duration::zero());
+  std::chrono::steady_clock::time_point deadline;
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (!has_status_timestamp_) return std::nullopt;
+    // 与status_is_fresh共用同一绝对截止点，不能从调用时重新计算完整超时。
+    deadline = last_status_received_at_ + status_age_limit;
+  }
+
+  const auto interpolate = [&](const IMUData & a, const IMUData & b) {
+    const auto q_a = a.q.normalized();
+    const auto q_b = b.q.normalized();
+    const double dt = tools::delta_time(b.timestamp, a.timestamp);
+    if (dt <= 1e-6) return q_b;
+    const double k = std::clamp(tools::delta_time(timestamp, a.timestamp) / dt, 0.0, 1.0);
+    return q_a.slerp(k, q_b).normalized();
+  };
+
+  if (timestamp <= data_ahead_.timestamp) {
+    if (has_prev_ && timestamp >= data_prev_.timestamp) {
+      return interpolate(data_prev_, data_ahead_);
+    }
+    return data_ahead_.q.normalized();
+  }
+
+  while (data_behind_.timestamp < timestamp) {
+    IMUData next;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) return std::nullopt;
+    const auto remaining = std::max(
+      std::chrono::milliseconds(1),
+      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
+    if (!queue_.pop_for(next, remaining)) return std::nullopt;
+    has_prev_ = true;
+    data_prev_ = data_ahead_;
+    data_ahead_ = data_behind_;
+    data_behind_ = next;
+  }
+
+  return interpolate(data_ahead_, data_behind_);
+}
+
+std::optional<Eigen::Quaterniond> ROS2Gimbal::try_imu_at_image(
+  std::chrono::steady_clock::time_point image_timestamp,
+  std::chrono::steady_clock::duration max_status_age)
+{
+  return try_imu_at(image_timestamp + imu_query_offset_, max_status_age);
+}
+
 double ROS2Gimbal::big_yaw_at(std::chrono::steady_clock::time_point timestamp)
 {
   if (!prime_queue_if_ready()) return latest_big_yaw();
@@ -534,6 +591,14 @@ ROS2GimbalState ROS2Gimbal::state() const
 {
   std::lock_guard<std::mutex> lk(mtx_);
   return {yaw_, yaw_vel_, pitch_, pitch_vel_, bullet_speed_, big_yaw_};
+}
+
+bool ROS2Gimbal::status_is_fresh(std::chrono::steady_clock::duration max_age) const
+{
+  std::lock_guard<std::mutex> lk(mtx_);
+  return detail::status_timestamp_is_fresh(
+    has_status_timestamp_, sample_count_.load(), last_status_received_at_,
+    std::chrono::steady_clock::now(), max_age);
 }
 
 }  // namespace io

@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16.3)
 
 project(sp_vision)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_BUILD_TYPE Release)
 message(STATUS "--------------------CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}--------------------")
@@ -152,8 +154,37 @@ target_link_libraries(sentry_yaw_control_test ${OpenCV_LIBS} fmt::fmt tools)
 add_executable(sentry_mpc_transform_test tests/sentry_mpc_transform_test.cpp)
 target_link_libraries(sentry_mpc_transform_test ${OpenCV_LIBS} fmt::fmt tools)
 
+add_executable(sentry_mpc_takeover_test tests/sentry_mpc_takeover_test.cpp)
+target_link_libraries(sentry_mpc_takeover_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
+add_executable(camera_passthrough_test tests/camera_passthrough_test.cpp)
+target_link_libraries(camera_passthrough_test ${OpenCV_LIBS} io tools fmt::fmt yaml-cpp)
+
+add_executable(sentry_camera_axis_test tests/sentry_camera_axis_test.cpp)
+target_link_libraries(sentry_camera_axis_test Eigen3::Eigen yaml-cpp)
+
+add_executable(planner_sentry_safety_test tests/planner_sentry_safety_test.cpp)
+target_link_libraries(planner_sentry_safety_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
 add_executable(armor_type_logic_test tests/armor_type_logic_test.cpp)
 target_link_libraries(armor_type_logic_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
+if(BUILD_TESTING)
+    add_test(NAME gimbal_axis_order_test COMMAND gimbal_axis_order_test)
+    add_test(NAME sentry_yaw_control_test COMMAND sentry_yaw_control_test)
+    add_test(NAME sentry_mpc_transform_test COMMAND sentry_mpc_transform_test)
+    add_test(NAME sentry_mpc_takeover_test COMMAND sentry_mpc_takeover_test)
+    add_test(NAME ros2_gimbal_big_yaw_lookup_test COMMAND ros2_gimbal_big_yaw_lookup_test)
+    add_test(NAME camera_passthrough_test COMMAND camera_passthrough_test)
+    add_test(
+        NAME sentry_camera_axis_test
+        COMMAND sentry_camera_axis_test ${CMAKE_CURRENT_SOURCE_DIR}/configs/sentry.yaml
+    )
+    add_test(
+        NAME planner_sentry_safety_test
+        COMMAND planner_sentry_safety_test ${CMAKE_CURRENT_SOURCE_DIR}/configs/sentry.yaml
+    )
+endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/local/local_tests.cmake OPTIONAL)
 

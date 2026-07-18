@@ -30,6 +30,27 @@ int main()
 {
   const auto t0 = std::chrono::steady_clock::now();
 
+  if (io::detail::status_timestamp_is_fresh(false, 2, t0, t0, 200ms)) {
+    std::cerr << "invalid status timestamp was accepted" << std::endl;
+    return 1;
+  }
+  if (io::detail::status_timestamp_is_fresh(true, 1, t0, t0, 200ms)) {
+    std::cerr << "a single status sample was accepted" << std::endl;
+    return 1;
+  }
+  if (!io::detail::status_timestamp_is_fresh(true, 2, t0, t0 + 150ms, 200ms)) {
+    std::cerr << "fresh status timestamp was rejected" << std::endl;
+    return 1;
+  }
+  if (io::detail::status_timestamp_is_fresh(true, 2, t0, t0 + 250ms, 200ms)) {
+    std::cerr << "stale status timestamp was accepted" << std::endl;
+    return 1;
+  }
+  if (io::detail::status_timestamp_is_fresh(true, 2, t0 + 1ms, t0, 200ms)) {
+    std::cerr << "future status timestamp was accepted" << std::endl;
+    return 1;
+  }
+
   {
     constexpr double pi = 3.14159265358979323846;
     const Eigen::Quaterniond imu_q(

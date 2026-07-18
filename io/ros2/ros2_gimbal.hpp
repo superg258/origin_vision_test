@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -36,6 +37,9 @@ public:
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
   Eigen::Quaterniond imu_at_image(std::chrono::steady_clock::time_point image_timestamp);
+  std::optional<Eigen::Quaterniond> try_imu_at_image(
+    std::chrono::steady_clock::time_point image_timestamp,
+    std::chrono::steady_clock::duration max_status_age);
   double big_yaw_at_image(std::chrono::steady_clock::time_point image_timestamp);
   double offset_ms() const;
 
@@ -51,6 +55,9 @@ public:
   double bullet_speed() const;
   Mode mode() const;
   ROS2GimbalState state() const;
+
+  // Read-only application health signal; it does not change any ROS2/electrical message field.
+  bool status_is_fresh(std::chrono::steady_clock::duration max_age) const;
 
 private:
   struct IMUData
@@ -73,6 +80,9 @@ private:
   void configure_topics();
   void status_callback(const std::shared_ptr<rclcpp::SerializedMessage> & message);
   bool prime_queue_if_ready();
+  std::optional<Eigen::Quaterniond> try_imu_at(
+    std::chrono::steady_clock::time_point timestamp,
+    std::chrono::steady_clock::duration max_status_age);
   Eigen::Quaterniond latest_q() const;
   double latest_big_yaw() const;
   double big_yaw_at(std::chrono::steady_clock::time_point timestamp);
@@ -94,6 +104,8 @@ private:
   IMUData data_ahead_;
   IMUData data_behind_;
   Eigen::Quaterniond latest_q_{Eigen::Quaterniond::Identity()};
+  std::chrono::steady_clock::time_point last_status_received_at_{};
+  bool has_status_timestamp_{false};
   bool has_prev_{false};
   Mode mode_{Mode::idle};
   double yaw_ = 0.0;
