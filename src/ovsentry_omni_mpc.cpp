@@ -609,7 +609,7 @@ int main(int argc, char * argv[])
      omni_fov_h_deg},
     read_cam_path("left", "omni_left_path", "video0"),
     {0, 255, 0},
-    cv::ROTATE_90_CLOCKWISE};
+    cv::ROTATE_90_COUNTERCLOCKWISE};
   const OmniCamConfig right_cam_cfg{
     {omniperception::OmniCameraSlot::right, "right",
      read_cam_path("right", "omni_right_path", "video2"),
@@ -617,7 +617,7 @@ int main(int argc, char * argv[])
      omni_fov_h_deg},
     read_cam_path("right", "omni_right_path", "video2"),
     {0, 255, 255},
-    cv::ROTATE_90_COUNTERCLOCKWISE};
+    cv::ROTATE_90_CLOCKWISE};
   const OmniCamConfig back_cam_cfg{
     {omniperception::OmniCameraSlot::back, "back",
      read_cam_path("back", "omni_back_path", "video4"),
