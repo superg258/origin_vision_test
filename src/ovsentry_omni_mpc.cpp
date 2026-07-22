@@ -1,22 +1,20 @@
-#include <fmt/core.h>
-
 #include <fastcdr/Cdr.h>
 #include <fastcdr/FastBuffer.h>
+#include <fmt/core.h>
 
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
+#include <opencv2/opencv.hpp>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <nlohmann/json.hpp>
-#include <opencv2/opencv.hpp>
 
 #include "io/camera.hpp"
 #include "io/ros2/ros2_gimbal.hpp"
@@ -24,8 +22,9 @@
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
+#include "tasks/auto_aim/sentry_mpc_safety.hpp"
+#include "tasks/auto_aim/sentry_mpc_takeover.hpp"
 #include "tasks/auto_aim/sentry_mpc_transform.hpp"
-#include "tasks/auto_aim/sentry_yaw_control.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -42,6 +41,7 @@
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
+#include "tools/recorder.hpp"
 #include "tools/yaml.hpp"
 
 namespace
@@ -51,6 +51,7 @@ struct OmniCamConfig
   omniperception::CameraSpec spec;
   std::string dev_name;
   cv::Scalar color;
+  std::optional<cv::RotateFlags> rotation;
 };
 
 struct OmniInferenceResult
@@ -70,6 +71,17 @@ struct OmniCandidateFrame
   double base_big_yaw_rad = 0.0;
   bool has_base_big_yaw = false;
   std::optional<omniperception::OmniCandidate> candidate;
+};
+
+struct TargetSession
+{
+  auto_aim::ArmorName name;
+  auto_aim::ArmorType armor_type;
+
+  bool operator==(const TargetSession & rhs) const
+  {
+    return name == rhs.name && armor_type == rhs.armor_type;
+  }
 };
 
 std::string normalize_dev_name(const std::string & dev)
@@ -392,19 +404,11 @@ bool same_omni_target_continuation(
 double horizon_distance(const auto_aim::Target & target)
 {
   const auto & x = target.ekf_x();
-  return std::sqrt(x[0] * x[0] + x[2] * x[2]);
+  return std::hypot(x[0], x[2]);
 }
 
-void fill_nav_target_info(io::Command & command, const std::list<auto_aim::Target> & targets)
+void fill_target_info(io::Command & command, const auto_aim::Target & target)
 {
-  command.armor_id = 0;
-  command.vx = 0.0;
-  command.vy = 0.0;
-  command.horizon_distance = 0.0;
-
-  if (!command.control || targets.empty()) return;
-
-  const auto & target = targets.front();
   const auto x = target.ekf_x();
   command.armor_id = armor_name_to_nav_id(target.name);
   command.vx = x[1];
@@ -412,11 +416,34 @@ void fill_nav_target_info(io::Command & command, const std::list<auto_aim::Targe
   command.horizon_distance = horizon_distance(target);
 }
 
+bool gimbal_state_is_finite(const io::ROS2GimbalState & state)
+{
+  return std::isfinite(state.yaw) && std::isfinite(state.yaw_vel) && std::isfinite(state.pitch) &&
+         std::isfinite(state.pitch_vel) && std::isfinite(state.bullet_speed) &&
+         std::isfinite(state.big_yaw);
+}
+
+void disable_gimbal(io::ROS2Gimbal & gimbal)
+{
+  gimbal.send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
+}
+
+class GimbalSafeStop
+{
+public:
+  explicit GimbalSafeStop(io::ROS2Gimbal & gimbal) : gimbal_(gimbal) {}
+  ~GimbalSafeStop() { disable_gimbal(gimbal_); }
+
+private:
+  io::ROS2Gimbal & gimbal_;
+};
+
 void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 {
   tools::draw_text(
     img,
-    fmt::format("{} ({}) {:.1f}ms", slot_name(result.cam.spec.slot), result.cam.dev_name, result.infer_ms),
+    fmt::format(
+      "{} ({}) {:.1f}ms", slot_name(result.cam.spec.slot), result.cam.dev_name, result.infer_ms),
     {10, 30}, result.cam.color, 0.7, 2);
 
   if (!result.top_armor.has_value()) {
@@ -429,8 +456,8 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
   tools::draw_text(
     img,
     fmt::format(
-      "{} pri={} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name],
-      static_cast<int>(armor.priority), armor.confidence),
+      "{} pri={} conf={:.2f}", auto_aim::ARMOR_NAMES[armor.name], static_cast<int>(armor.priority),
+      armor.confidence),
     {10, 60}, result.cam.color, 0.7, 2);
   tools::draw_text(
     img, fmt::format("delta yaw={:.1f} pitch={:.1f}", result.delta_yaw_deg, result.delta_pitch_deg),
@@ -451,25 +478,40 @@ void draw_auto_aim_overlay(
   }
 
   const auto & aim_point = aimer.debug_aim_point;
-  const auto aim_image_points =
-    solver.reproject_armor(aim_point.xyza.head(3), aim_point.xyza[3], target.armor_type, target.name);
-  tools::draw_points(img, aim_image_points, aim_point.valid ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0));
+  if (aim_point.valid) {
+    const auto aim_image_points = solver.reproject_armor(
+      aim_point.xyza.head(3), aim_point.xyza[3], target.armor_type, target.name);
+    tools::draw_points(img, aim_image_points, {0, 0, 255});
+  }
 }
 
 cv::Mat resize_for_view(const cv::Mat & img)
 {
+  constexpr int view_width = 640;
+  constexpr int view_height = 360;
+  const double scale = std::min(
+    static_cast<double>(view_width) / img.cols, static_cast<double>(view_height) / img.rows);
+
   cv::Mat resized;
-  cv::resize(img, resized, {640, 360});
-  return resized;
+  cv::resize(img, resized, {}, scale, scale);
+
+  cv::Mat canvas = cv::Mat::zeros(view_height, view_width, img.type());
+  const int x = (view_width - resized.cols) / 2;
+  const int y = (view_height - resized.rows) / 2;
+  resized.copyTo(canvas(cv::Rect{x, y, resized.cols, resized.rows}));
+  return canvas;
 }
 }  // namespace
 
 const std::string keys =
   "{help h usage ? |                         | 输出命令行参数说明}"
   "{@config-path   | configs/sentry.yaml    | 位置参数，yaml配置文件路径 }"
-  "{left           | __yaml__                | 左前相机设备名(相对/dev)，默认读yaml.omni_left_path }"
-  "{right          | __yaml__                | 右前相机设备名(相对/dev)，默认读yaml.omni_right_path }"
-  "{back           | __yaml__                | 正后相机设备名(相对/dev)，默认读yaml.omni_back_path }"
+  "{left           | __yaml__                | 左前相机设备名(相对/dev)，默认读yaml.omni_left_path "
+  "}"
+  "{right          | __yaml__                | "
+  "右前相机设备名(相对/dev)，默认读yaml.omni_right_path }"
+  "{back           | __yaml__                | 正后相机设备名(相对/dev)，默认读yaml.omni_back_path "
+  "}"
   "{left_yaw       | 60                      | 左前相机中心yaw角(deg) }"
   "{right_yaw      | -60                     | 右前相机中心yaw角(deg) }"
   "{back_yaw       | 180                     | 正后相机中心yaw角(deg) }"
@@ -488,42 +530,47 @@ int main(int argc, char * argv[])
 
   auto yaml = tools::load(config_path);
   auto read_infer_device = [&](const std::string & key) {
-      if (yaml[key]) return yaml[key].as<std::string>();
-      if (yaml["device"]) return yaml["device"].as<std::string>();
-      return std::string("UNKNOWN");
-    };
-  auto read_cam_path = [&](const std::string & cli_key, const std::string & yaml_key,
-                           const std::string & fallback) {
+    if (yaml[key]) return yaml[key].as<std::string>();
+    if (yaml["device"]) return yaml["device"].as<std::string>();
+    return std::string("UNKNOWN");
+  };
+  auto read_cam_path =
+    [&](const std::string & cli_key, const std::string & yaml_key, const std::string & fallback) {
       const auto cli_value = cli.get<std::string>(cli_key);
       if (!cli_value.empty() && cli_value != "__yaml__") return normalize_dev_name(cli_value);
       if (yaml[yaml_key]) return normalize_dev_name(yaml[yaml_key].as<std::string>());
       return normalize_dev_name(fallback);
     };
-  auto read_cli_or_yaml_double = [&](const std::string & cli_key, const std::string & yaml_key,
-                                     double fallback) {
+  auto read_cli_or_yaml_double =
+    [&](const std::string & cli_key, const std::string & yaml_key, double fallback) {
       if (cli.has(cli_key)) return cli.get<double>(cli_key);
       if (yaml[yaml_key]) return yaml[yaml_key].as<double>();
       return fallback;
     };
+  const auto read_or = [&](const char * key, double fallback) {
+    return yaml[key] ? yaml[key].as<double>() : fallback;
+  };
 
-  const tools::GimbalAxisOrder gimbal_axis_order = yaml["gimbal_axis_order"]
-                                                     ? tools::parse_gimbal_axis_order(
-                                                         yaml["gimbal_axis_order"].as<std::string>())
-                                                     : tools::GimbalAxisOrder::yaw_pitch;
+  const tools::GimbalAxisOrder gimbal_axis_order =
+    yaml["gimbal_axis_order"]
+      ? tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>())
+      : tools::GimbalAxisOrder::yaw_pitch;
   const std::string auto_aim_device = read_infer_device("auto_aim_device");
   const std::string omni_device = read_infer_device("omni_device");
   const double omni_retarget_cooldown_s =
     yaml["omni_retarget_cooldown_s"] ? yaml["omni_retarget_cooldown_s"].as<double>() : 2.5;
   const double omni_hold_release_tolerance_deg =
-    yaml["omni_hold_release_tolerance_deg"] ? yaml["omni_hold_release_tolerance_deg"].as<double>() : 3.0;
+    yaml["omni_hold_release_tolerance_deg"] ? yaml["omni_hold_release_tolerance_deg"].as<double>()
+                                            : 3.0;
   const double omni_retarget_min_delta_deg =
     yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
   const double omni_command_timeout_s =
     yaml["omni_command_timeout_s"] ? yaml["omni_command_timeout_s"].as<double>() : 0.5;
-  const auto omni_read_timeout = std::chrono::milliseconds(
-    std::max(1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
-  const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-    std::chrono::duration<double>(omni_retarget_cooldown_s));
+  const auto omni_read_timeout = std::chrono::milliseconds(std::max(
+    1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
+  const auto omni_retarget_cooldown =
+    std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(omni_retarget_cooldown_s));
   const auto omni_command_timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_command_timeout_s));
   const std::string auto_aim_ignore_topic = yaml["auto_aim_ignore_topic"]
@@ -532,31 +579,65 @@ int main(int argc, char * argv[])
   const std::string auto_aim_ignore_msg_type =
     yaml["auto_aim_ignore_msg_type"] ? yaml["auto_aim_ignore_msg_type"].as<std::string>()
                                      : "rm_interfaces/msg/RequestAutoAimIgnore";
+  const double takeover_time_s = read_or("mpc_takeover_time_s", 0.20);
+  const double configured_status_timeout_s = read_or("mpc_gimbal_status_timeout_s", 0.20);
+  const double status_timeout_s =
+    std::isfinite(configured_status_timeout_s) && configured_status_timeout_s >= 0.0
+      ? configured_status_timeout_s
+      : 0.20;
+  const double configured_max_yaw_acc = read_or("max_yaw_acc", 50.0);
+  const double configured_max_pitch_acc = read_or("max_pitch_acc", 100.0);
+  const double max_yaw_acc = std::isfinite(configured_max_yaw_acc) && configured_max_yaw_acc > 0.0
+                               ? configured_max_yaw_acc
+                               : 50.0;
+  const double max_pitch_acc =
+    std::isfinite(configured_max_pitch_acc) && configured_max_pitch_acc > 0.0
+      ? configured_max_pitch_acc
+      : 100.0;
+  auto_aim::SentryMpcSafetyLimits safety_limits;
+  safety_limits.min_pitch = read_or("mpc_pitch_min_deg", -60.0) / 57.3;
+  safety_limits.max_pitch = read_or("mpc_pitch_max_deg", 30.0) / 57.3;
+  const auto status_timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(status_timeout_s));
 
   const double omni_fov_h_deg = read_cli_or_yaml_double("fov_h", "omni_fov_h_deg", 120.0);
   const double omni_fov_v_deg = read_cli_or_yaml_double("fov_v", "omni_fov_v_deg", 67.0);
   const OmniCamConfig left_cam_cfg{
-    {omniperception::OmniCameraSlot::left, "left", read_cam_path("left", "omni_left_path", "video0"),
-     read_cli_or_yaml_double("left_yaw", "omni_left_yaw_deg", 60.0), omni_fov_h_deg, omni_fov_v_deg},
-    read_cam_path("left", "omni_left_path", "video0"), {0, 255, 0}};
+    {omniperception::OmniCameraSlot::left, "left",
+     read_cam_path("left", "omni_left_path", "video0"),
+     read_cli_or_yaml_double("left_yaw", "omni_left_yaw_deg", 60.0), omni_fov_v_deg,
+     omni_fov_h_deg},
+    read_cam_path("left", "omni_left_path", "video0"),
+    {0, 255, 0},
+    cv::ROTATE_90_CLOCKWISE};
   const OmniCamConfig right_cam_cfg{
-    {omniperception::OmniCameraSlot::right, "right", read_cam_path("right", "omni_right_path", "video2"),
-     read_cli_or_yaml_double("right_yaw", "omni_right_yaw_deg", -60.0), omni_fov_h_deg, omni_fov_v_deg},
-    read_cam_path("right", "omni_right_path", "video2"), {0, 255, 255}};
+    {omniperception::OmniCameraSlot::right, "right",
+     read_cam_path("right", "omni_right_path", "video2"),
+     read_cli_or_yaml_double("right_yaw", "omni_right_yaw_deg", -60.0), omni_fov_v_deg,
+     omni_fov_h_deg},
+    read_cam_path("right", "omni_right_path", "video2"),
+    {0, 255, 255},
+    cv::ROTATE_90_COUNTERCLOCKWISE};
   const OmniCamConfig back_cam_cfg{
-    {omniperception::OmniCameraSlot::back, "back", read_cam_path("back", "omni_back_path", "video4"),
-     read_cli_or_yaml_double("back_yaw", "omni_back_yaw_deg", 180.0), omni_fov_h_deg, omni_fov_v_deg},
-    read_cam_path("back", "omni_back_path", "video4"), {255, 200, 0}};
+    {omniperception::OmniCameraSlot::back, "back",
+     read_cam_path("back", "omni_back_path", "video4"),
+     read_cli_or_yaml_double("back_yaw", "omni_back_yaw_deg", 180.0), omni_fov_h_deg,
+     omni_fov_v_deg},
+    read_cam_path("back", "omni_back_path", "video4"),
+    {255, 200, 0},
+    std::nullopt};
 
   tools::logger()->info(
     "[OVSentryOmniMPC] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
 
   tools::Exiter exiter;
   tools::Plotter plotter;
+  tools::Recorder recorder(30);
   const bool display = !cli.has("no-display");
   constexpr bool yolo_debug = false;
 
   auto gimbal = std::make_unique<io::ROS2Gimbal>(config_path);
+  GimbalSafeStop safe_stop(*gimbal);
   ArmorIgnoreSubscriber armor_ignore_subscriber(auto_aim_ignore_topic, auto_aim_ignore_msg_type);
   auto auto_aim_camera = std::make_unique<io::Camera>(config_path);
 
@@ -566,6 +647,8 @@ int main(int argc, char * argv[])
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
   auto_aim::Planner planner(config_path);
+  auto_aim::SentryMpcTakeover takeover(takeover_time_s, max_yaw_acc, max_pitch_acc);
+  auto_aim::SentryMpcSafetyGate safety_gate(safety_limits);
   omniperception::Decider decider(config_path);
   constexpr bool aimer_to_now = true;
 
@@ -577,14 +660,20 @@ int main(int argc, char * argv[])
 
   auto yolo_omni_left = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
   auto yolo_omni_right = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
-  auto yolo_omni_back = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
+  std::unique_ptr<auto_aim::YOLO> yolo_omni_back;
+  if (!back_cam_cfg.dev_name.empty()) {
+    yolo_omni_back = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
+  }
 
   io::USBCamera cam_left(left_cam_cfg.dev_name, config_path);
   io::USBCamera cam_right(right_cam_cfg.dev_name, config_path);
-  io::USBCamera cam_back(back_cam_cfg.dev_name, config_path);
+  std::unique_ptr<io::USBCamera> cam_back;
+  if (!back_cam_cfg.dev_name.empty()) {
+    cam_back = std::make_unique<io::USBCamera>(back_cam_cfg.dev_name, config_path);
+  }
   cam_left.device_name = left_cam_cfg.spec.label;
   cam_right.device_name = right_cam_cfg.spec.label;
-  cam_back.device_name = back_cam_cfg.spec.label;
+  if (cam_back) cam_back->device_name = back_cam_cfg.spec.label;
 
   cv::Mat main_img, left_img, right_img, back_img;
   std::chrono::steady_clock::time_point main_timestamp, ts_left, ts_right, ts_back;
@@ -596,25 +685,88 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
   bool active_omni_timeout_running = false;
   bool prev_omni_mode = false;
+  std::optional<TargetSession> active_target_session;
+  bool status_warning_active = false;
   int frame_count = 0;
+
+  tools::logger()->info(
+    "[OVSentryOmniMPC] world-frame dual-yaw MPC enabled; takeover={:.0f}ms, "
+    "pitch_limit=[{:.1f},{:.1f}]deg",
+    takeover_time_s * 1e3, safety_limits.min_pitch * 57.3, safety_limits.max_pitch * 57.3);
+
+  const auto reset_control_session = [&]() {
+    takeover.reset();
+    active_target_session.reset();
+  };
+  const auto clear_omni_timeout_session = [&]() {
+    active_omni_timeout_target.reset();
+    active_omni_timeout_started_at = std::chrono::steady_clock::time_point{};
+    active_omni_timeout_running = false;
+  };
+  const auto clear_omni_redirect_state = [&]() {
+    omni_hold_command.reset();
+    session_accepted_omni_target.reset();
+    cooldown_anchor_omni_target.reset();
+    omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
+    clear_omni_timeout_session();
+  };
 
   while (!exiter.exit()) {
     try {
       auto_aim_camera->read(main_img, main_timestamp);
-      if (main_img.empty()) continue;
+      if (main_img.empty()) {
+        tools::logger()->warn("[OVSentryOmniMPC] empty main camera frame, skipping");
+        disable_gimbal(*gimbal);
+        reset_control_session();
+        clear_omni_redirect_state();
+        continue;
+      }
     } catch (const std::exception & e) {
       tools::logger()->error("[OVSentryOmniMPC] main camera read failed: {}", e.what());
+      disable_gimbal(*gimbal);
+      reset_control_session();
+      clear_omni_redirect_state();
       continue;
     }
 
     frame_count++;
-    Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
+    bool gimbal_status_fresh = gimbal->status_is_fresh(status_timeout);
+    if (!gimbal_status_fresh) {
+      if (!status_warning_active) {
+        tools::logger()->warn(
+          "[OVSentryOmniMPC] gimbal status missing or stale; control remains disabled");
+        status_warning_active = true;
+      }
+      disable_gimbal(*gimbal);
+      reset_control_session();
+      clear_omni_redirect_state();
+      continue;
+    }
+    if (status_warning_active) {
+      tools::logger()->info("[OVSentryOmniMPC] fresh gimbal status restored");
+      status_warning_active = false;
+    }
+
+    const auto q_at_image = gimbal->try_imu_at_image(main_timestamp, status_timeout);
+    const auto initial_gimbal_state = gimbal->state();
+    recorder.record(main_img, q_at_image.value_or(Eigen::Quaterniond::Identity()), main_timestamp);
+    if (
+      !q_at_image.has_value() || !q_at_image->coeffs().allFinite() || q_at_image->norm() < 1e-6 ||
+      !gimbal_state_is_finite(initial_gimbal_state)) {
+      tools::logger()->warn("[OVSentryOmniMPC] invalid gimbal state; control remains disabled");
+      disable_gimbal(*gimbal);
+      reset_control_session();
+      clear_omni_redirect_state();
+      continue;
+    }
+
+    const Eigen::Quaterniond q = q_at_image->normalized();
     solver.set_R_gimbal2world(q);
     buff_solver.set_R_gimbal2world(q);
-    const auto gimbal_state = gimbal->state();
+    auto gimbal_state = initial_gimbal_state;
     const auto gimbal_mode = gimbal->mode();
     const bool buff_mode = is_buff_mode(gimbal_mode);
-    Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+    const Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto t0 = std::chrono::steady_clock::now();
     auto t1 = t0;
@@ -633,6 +785,18 @@ int main(int argc, char * argv[])
       targets = tracker.track(armors, main_timestamp);
       tracker_state = tracker.state();
       omni_mode = tracker_state == "lost";
+    }
+
+    gimbal_status_fresh = gimbal->status_is_fresh(status_timeout);
+    gimbal_state = gimbal->state();
+    if (!gimbal_status_fresh || !gimbal_state_is_finite(gimbal_state)) {
+      tools::logger()->warn(
+        "[OVSentryOmniMPC] gimbal status became stale during detection; command suppressed");
+      disable_gimbal(*gimbal);
+      reset_control_session();
+      clear_omni_redirect_state();
+      status_warning_active = true;
+      continue;
     }
 
     std::optional<OmniInferenceResult> best_omni_result;
@@ -658,25 +822,14 @@ int main(int argc, char * argv[])
     const auto now = std::chrono::steady_clock::now();
     io::Command command{false, false, 0.0, 0.0};
     std::optional<auto_aim::Plan> main_mpc_plan;
+    std::optional<auto_aim::SentryMpcSetpoint> main_mpc_setpoint;
+    bool tracker_control_ready = false;
+    bool aim_point_ready = false;
     std::optional<auto_buff::PowerRune> buff_power_runes;
     bool buff_target_solved = false;
     double buff_detect_time_ms = 0.0;
     double buff_solve_time_ms = 0.0;
     double buff_aim_time_ms = 0.0;
-
-    auto clear_omni_timeout_session = [&]() {
-        active_omni_timeout_target.reset();
-        active_omni_timeout_started_at = std::chrono::steady_clock::time_point{};
-        active_omni_timeout_running = false;
-      };
-
-    auto clear_omni_redirect_state = [&]() {
-        omni_hold_command.reset();
-        session_accepted_omni_target.reset();
-        cooldown_anchor_omni_target.reset();
-        omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
-        clear_omni_timeout_session();
-      };
 
     if (cooldown_anchor_omni_target.has_value() && now >= omni_retarget_cooldown_deadline) {
       cooldown_anchor_omni_target.reset();
@@ -690,6 +843,7 @@ int main(int argc, char * argv[])
     }
 
     if (buff_mode) {
+      reset_control_session();
       left_img.release();
       right_img.release();
       back_img.release();
@@ -724,8 +878,8 @@ int main(int argc, char * argv[])
       if (command.control) {
         // BuffAimer returns a command in the configured mechanical axis order. Recover its world
         // direction once, then emit a world-referenced small yaw plus the physical pitch joint.
-        const Eigen::Vector3d world_direction = tools::gimbal_direction_from_command(
-          command.yaw, command.pitch, gimbal_axis_order);
+        const Eigen::Vector3d world_direction =
+          tools::gimbal_direction_from_command(command.yaw, command.pitch, gimbal_axis_order);
         const double world_yaw = std::atan2(world_direction.y(), world_direction.x());
         const double continuous_big_yaw =
           nearest_continuous_yaw_rad(world_yaw, gimbal_state.big_yaw);
@@ -737,32 +891,43 @@ int main(int argc, char * argv[])
       const double buff_small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
 
       gimbal->send_mpc(
-        command.control, command.shoot, buff_big_yaw, buff_small_yaw, command.pitch, 0.0, 0.0,
-        0.0, 0.0, 0, 0.0, 0.0, 0.0);
+        command.control, command.shoot, buff_big_yaw, buff_small_yaw, command.pitch, 0.0, 0.0, 0.0,
+        0.0, 0, 0.0, 0.0, 0.0);
 
       buff_detect_time_ms = tools::delta_time(buff_detect_end, buff_detect_start) * 1e3;
       buff_solve_time_ms = tools::delta_time(buff_solve_end, buff_solve_start) * 1e3;
       buff_aim_time_ms = tools::delta_time(buff_aim_end, buff_aim_start) * 1e3;
     } else if (omni_mode) {
-      auto read_omni_frame = [&](io::USBCamera & camera, cv::Mat & img,
-                                 std::chrono::steady_clock::time_point & ts,
-                                 const OmniCamConfig & cam_cfg) {
-          OmniCandidateFrame frame;
-          frame.result.cam = cam_cfg;
-          const bool ok = camera.read_with_timeout(img, ts, omni_read_timeout);
-          if (!ok || img.empty()) {
-            img.release();
-            return frame;
-          }
-          frame.timestamp = ts;
-          frame.base_big_yaw_rad = gimbal->big_yaw_at_image(ts);
-          frame.has_base_big_yaw = true;
+      reset_control_session();
+      auto read_omni_frame = [&](
+                               io::USBCamera & camera, cv::Mat & img,
+                               std::chrono::steady_clock::time_point & ts,
+                               const OmniCamConfig & cam_cfg) {
+        OmniCandidateFrame frame;
+        frame.result.cam = cam_cfg;
+        const bool ok = camera.read_with_timeout(img, ts, omni_read_timeout);
+        if (!ok || img.empty()) {
+          img.release();
           return frame;
-        };
+        }
+        if (cam_cfg.rotation.has_value()) {
+          cv::rotate(img, img, cam_cfg.rotation.value());
+        }
+        frame.timestamp = ts;
+        frame.base_big_yaw_rad = gimbal->big_yaw_at_image(ts);
+        frame.has_base_big_yaw = true;
+        return frame;
+      };
 
       auto left_frame = read_omni_frame(cam_left, left_img, ts_left, left_cam_cfg);
       auto right_frame = read_omni_frame(cam_right, right_img, ts_right, right_cam_cfg);
-      auto back_frame = read_omni_frame(cam_back, back_img, ts_back, back_cam_cfg);
+      OmniCandidateFrame back_frame;
+      back_frame.result.cam = back_cam_cfg;
+      if (cam_back) {
+        back_frame = read_omni_frame(*cam_back, back_img, ts_back, back_cam_cfg);
+      } else {
+        back_img.release();
+      }
 
       auto t_omni0 = std::chrono::steady_clock::now();
       if (left_frame.has_base_big_yaw && !left_img.empty()) {
@@ -773,13 +938,13 @@ int main(int argc, char * argv[])
         right_frame.result.armors = yolo_omni_right->detect(right_img, frame_count);
       }
       auto t_omni2 = std::chrono::steady_clock::now();
-      if (back_frame.has_base_big_yaw && !back_img.empty()) {
+      if (yolo_omni_back && back_frame.has_base_big_yaw && !back_img.empty()) {
         back_frame.result.armors = yolo_omni_back->detect(back_img, frame_count);
       }
       auto t_omni3 = std::chrono::steady_clock::now();
 
-      auto finalize_frame = [&](OmniCandidateFrame & frame, const OmniCamConfig & cam_cfg,
-                                double infer_ms) {
+      auto finalize_frame =
+        [&](OmniCandidateFrame & frame, const OmniCamConfig & cam_cfg, double infer_ms) {
           frame.result.infer_ms = infer_ms;
           decider.armor_filter(frame.result.armors);
           decider.set_priority(frame.result.armors);
@@ -919,13 +1084,12 @@ int main(int argc, char * argv[])
       }
 
       const double omni_big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
-      const double omni_small_yaw = command.has_target_yaw
-                                      ? nearest_continuous_yaw_rad(
-                                          command.small_yaw, gimbal_state.yaw)
-                                      : command.yaw;
+      const double omni_small_yaw =
+        command.has_target_yaw ? nearest_continuous_yaw_rad(command.small_yaw, gimbal_state.yaw)
+                               : command.yaw;
       gimbal->send_mpc(
-        command.control, command.shoot, omni_big_yaw, omni_small_yaw, command.pitch,
-        0.0, 0.0, 0.0, 0.0, static_cast<uint8_t>(command.armor_id), 0.0, 0.0, 0.0);
+        command.control, command.shoot, omni_big_yaw, omni_small_yaw, command.pitch, 0.0, 0.0, 0.0,
+        0.0, static_cast<uint8_t>(command.armor_id), 0.0, 0.0, 0.0);
     } else {
       left_img.release();
       right_img.release();
@@ -933,39 +1097,70 @@ int main(int argc, char * argv[])
       clear_omni_redirect_state();
 
       // Aimer 仅保留选板状态和可视化信息；实际控制角、速度和加速度全部来自 MPC。
+      tracker_control_ready = tracker_state == "tracking";
       (void)aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
 
       auto_aim::Plan mpc_plan{false};
-      double mpc_big_yaw = 0.0;
-      if (!targets.empty()) {
-        const auto sentry_plan =
-          planner.plan_sentry_world(targets.front(), gimbal->bullet_speed());
+      auto_aim::SentryMpcSetpoint setpoint;
+      std::optional<int> control_armor_id;
+      if (!targets.empty() && tracker_control_ready && aimer.debug_aim_point.valid) {
+        control_armor_id = aimer.debug_aim_point.armor_id;
+      }
+      aim_point_ready = control_armor_id.has_value();
+
+      if (targets.empty() || !tracker_control_ready || !aim_point_ready) {
+        reset_control_session();
+      } else {
+        const auto & target = targets.front();
+        const TargetSession session{target.name, target.armor_type};
+        if (!active_target_session.has_value() || !(active_target_session.value() == session)) {
+          takeover.reset();
+          active_target_session = session;
+        }
+
+        const auto sentry_plan = planner.plan_sentry_world(
+          std::optional<auto_aim::Target>{target}, gimbal->bullet_speed(),
+          control_armor_id.value());
         mpc_plan = sentry_plan.world_small_yaw_plan;
-        mpc_big_yaw = sentry_plan.big_yaw;
         main_mpc_plan = mpc_plan;
+        if (safety_gate.plan_is_safe(mpc_plan, gimbal_state.pitch)) {
+          setpoint = takeover.update(
+            mpc_plan, sentry_plan.big_yaw, gimbal_state.yaw, gimbal_state.yaw_vel,
+            gimbal_state.pitch, gimbal_state.pitch_vel, gimbal_state.big_yaw, now);
+          if (!safety_gate.setpoint_is_safe(
+                setpoint.command, setpoint.yaw_vel, setpoint.pitch_vel, setpoint.yaw_acc,
+                setpoint.pitch_acc)) {
+            setpoint = {};
+            takeover.reset();
+          }
+        } else {
+          takeover.reset();
+        }
       }
 
-      if (mpc_plan.control && !targets.empty()) {
-        const double continuous_small_yaw =
-          nearest_continuous_yaw_rad(mpc_plan.yaw, gimbal_state.yaw);
-        command = {true, false, continuous_small_yaw, mpc_plan.pitch};
-        auto_aim::sentry_yaw_control::apply(
-          command, mpc_big_yaw, gimbal_state.big_yaw, false);
+      const auto command_gimbal_state = gimbal->state();
+      if (
+        !gimbal->status_is_fresh(status_timeout) || !gimbal_state_is_finite(command_gimbal_state)) {
+        tools::logger()->warn(
+          "[OVSentryOmniMPC] gimbal status became stale during planning; command suppressed");
+        disable_gimbal(*gimbal);
+        reset_control_session();
+        status_warning_active = true;
+        continue;
       }
 
-      const Eigen::Vector3d motor_ypr{gimbal_state.yaw, gimbal_state.pitch, 0.0};
+      command = setpoint.command;
+      const Eigen::Vector3d motor_ypr{command_gimbal_state.yaw, command_gimbal_state.pitch, 0.0};
       const bool shooter_ready =
-        shooter.shoot(command, aimer, targets, motor_ypr, tracker_state == "tracking");
-      command.shoot = mpc_plan.control && mpc_plan.fire && shooter_ready;
-      fill_nav_target_info(command, targets);
+        shooter.shoot(command, aimer, targets, motor_ypr, tracker_control_ready);
+      command.shoot = command.control && tracker_control_ready && setpoint.fire_ready &&
+                      mpc_plan.fire && shooter_ready;
 
-      const double big_yaw = command.has_target_yaw ? command.big_yaw : command.yaw;
-      const double small_yaw = command.has_target_yaw ? command.small_yaw : command.yaw;
+      if (command.control && !targets.empty()) fill_target_info(command, targets.front());
 
-      gimbal->send_mpc(
-        command.control, command.shoot, big_yaw, small_yaw, command.pitch, mpc_plan.yaw_vel,
-        mpc_plan.pitch_vel, mpc_plan.yaw_acc, mpc_plan.pitch_acc,
-        static_cast<uint8_t>(command.armor_id), command.vx, command.vy, command.horizon_distance);
+      setpoint.command = command;
+      main_mpc_setpoint = setpoint;
+      auto_aim::dispatch_sentry_mpc(*gimbal, setpoint);
     }
 
     nlohmann::json data;
@@ -974,6 +1169,9 @@ int main(int argc, char * argv[])
     data["buff_mode"] = buff_mode ? 1 : 0;
     data["armor_num"] = armors.size();
     data["tracker_state"] = tracker_state;
+    data["gimbal_status_fresh"] = gimbal_status_fresh ? 1 : 0;
+    data["tracker_control_ready"] = tracker_control_ready ? 1 : 0;
+    data["aim_point_ready"] = aim_point_ready ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_small_yaw"] = gimbal_state.yaw * 57.3;
     data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
@@ -985,11 +1183,14 @@ int main(int argc, char * argv[])
     if (main_mpc_plan.has_value()) {
       data["mpc_target_yaw"] = main_mpc_plan->target_yaw * 57.3;
       data["mpc_target_pitch"] = main_mpc_plan->target_pitch * 57.3;
-      data["mpc_yaw_vel"] = main_mpc_plan->yaw_vel * 57.3;
-      data["mpc_pitch_vel"] = main_mpc_plan->pitch_vel * 57.3;
-      data["mpc_yaw_acc"] = main_mpc_plan->yaw_acc * 57.3;
-      data["mpc_pitch_acc"] = main_mpc_plan->pitch_acc * 57.3;
       data["mpc_plan_fire"] = main_mpc_plan->fire ? 1 : 0;
+    }
+    if (main_mpc_setpoint.has_value()) {
+      data["mpc_yaw_vel"] = main_mpc_setpoint->yaw_vel * 57.3;
+      data["mpc_pitch_vel"] = main_mpc_setpoint->pitch_vel * 57.3;
+      data["mpc_yaw_acc"] = main_mpc_setpoint->yaw_acc * 57.3;
+      data["mpc_pitch_acc"] = main_mpc_setpoint->pitch_acc * 57.3;
+      data["mpc_takeover_alpha"] = main_mpc_setpoint->takeover_alpha;
     }
     data["target_armor_id"] = static_cast<int>(command.armor_id);
     data["target_vx"] = command.vx;
@@ -1132,9 +1333,12 @@ int main(int argc, char * argv[])
         {10, 180}, {180, 255, 180}, 0.8, 2);
     }
 
-    cv::Mat left_show = left_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : left_img.clone();
-    cv::Mat right_show = right_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : right_img.clone();
-    cv::Mat back_show = back_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : back_img.clone();
+    cv::Mat left_show =
+      left_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : left_img.clone();
+    cv::Mat right_show =
+      right_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : right_img.clone();
+    cv::Mat back_show =
+      back_img.empty() ? cv::Mat::zeros(main_img.size(), main_img.type()) : back_img.clone();
 
     if (omni_mode && best_omni_result.has_value()) {
       const auto & best = best_omni_result.value();
