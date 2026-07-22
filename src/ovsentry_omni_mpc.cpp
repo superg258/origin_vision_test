@@ -485,18 +485,19 @@ void draw_auto_aim_overlay(
   }
 }
 
-cv::Mat resize_for_view(const cv::Mat & img, const cv::Size & view_size)
+cv::Mat resize_for_view(const cv::Mat & img)
 {
+  constexpr int view_width = 640;
+  constexpr int view_height = 360;
   const double scale = std::min(
-    static_cast<double>(view_size.width) / img.cols,
-    static_cast<double>(view_size.height) / img.rows);
+    static_cast<double>(view_width) / img.cols, static_cast<double>(view_height) / img.rows);
 
   cv::Mat resized;
   cv::resize(img, resized, {}, scale, scale);
 
-  cv::Mat canvas = cv::Mat::zeros(view_size, img.type());
-  const int x = (view_size.width - resized.cols) / 2;
-  const int y = (view_size.height - resized.rows) / 2;
+  cv::Mat canvas = cv::Mat::zeros(view_height, view_width, img.type());
+  const int x = (view_width - resized.cols) / 2;
+  const int y = (view_height - resized.rows) / 2;
   resized.copyTo(canvas(cv::Rect{x, y, resized.cols, resized.rows}));
   return canvas;
 }
@@ -1350,23 +1351,14 @@ int main(int argc, char * argv[])
       }
     }
 
-    cv::Mat canvas;
-    if (!cam_back) {
-      // 主相机保持 4:3，旋转后的左右相机保持 3:4；三路同高横排时无需黑边或拉伸。
-      const cv::Mat main_small = resize_for_view(main_img, {720, 540});
-      const cv::Mat left_small = resize_for_view(left_show, {405, 540});
-      const cv::Mat right_small = resize_for_view(right_show, {405, 540});
-      cv::hconcat(std::vector<cv::Mat>{main_small, left_small, right_small}, canvas);
-    } else {
-      const cv::Mat main_small = resize_for_view(main_img, {640, 360});
-      const cv::Mat left_small = resize_for_view(left_show, {640, 360});
-      const cv::Mat right_small = resize_for_view(right_show, {640, 360});
-      const cv::Mat back_small = resize_for_view(back_show, {640, 360});
-      cv::Mat top_row, bottom_row;
-      cv::hconcat(main_small, left_small, top_row);
-      cv::hconcat(right_small, back_small, bottom_row);
-      cv::vconcat(top_row, bottom_row, canvas);
-    }
+    cv::Mat main_small = resize_for_view(main_img);
+    cv::Mat left_small = resize_for_view(left_show);
+    cv::Mat right_small = resize_for_view(right_show);
+    cv::Mat back_small = resize_for_view(back_show);
+    cv::Mat top_row, bottom_row, canvas;
+    cv::hconcat(main_small, left_small, top_row);
+    cv::hconcat(right_small, back_small, bottom_row);
+    cv::vconcat(top_row, bottom_row, canvas);
     cv::imshow("ovsentry_omni_mpc", canvas);
     if (cv::waitKey(1) == 'q') break;
   }
