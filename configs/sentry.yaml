@@ -40,8 +40,8 @@ omni_camera_read_timeout_ms: 10
 omni_right_path: "/dev/video2"
 omni_left_path: "/dev/video0"
 omni_back_path: ""
-omni_left_yaw_deg: 60.0
-omni_right_yaw_deg: -60.0
+omni_left_yaw_deg: 120.0
+omni_right_yaw_deg: -120.0
 omni_back_yaw_deg: 180.0
 omni_fov_h_deg: 120.0
 omni_fov_v_deg: 67.0

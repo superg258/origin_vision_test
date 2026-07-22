@@ -51,7 +51,6 @@ struct OmniCamConfig
   omniperception::CameraSpec spec;
   std::string dev_name;
   cv::Scalar color;
-  std::optional<cv::RotateFlags> rotation;
 };
 
 struct OmniInferenceResult
@@ -512,11 +511,11 @@ const std::string keys =
   "右前相机设备名(相对/dev)，默认读yaml.omni_right_path }"
   "{back           | __yaml__                | 正后相机设备名(相对/dev)，默认读yaml.omni_back_path "
   "}"
-  "{left_yaw       | 60                      | 左前相机中心yaw角(deg) }"
-  "{right_yaw      | -60                     | 右前相机中心yaw角(deg) }"
-  "{back_yaw       | 180                     | 正后相机中心yaw角(deg) }"
-  "{fov_h          | 120                     | USB相机水平视场角(deg) }"
-  "{fov_v          | 67                      | USB相机垂直视场角(deg) }"
+  "{left_yaw       |                         | 左前相机中心yaw角(deg) }"
+  "{right_yaw      |                         | 右前相机中心yaw角(deg) }"
+  "{back_yaw       |                         | 正后相机中心yaw角(deg) }"
+  "{fov_h          |                         | USB相机水平视场角(deg) }"
+  "{fov_v          |                         | USB相机垂直视场角(deg) }"
   "{no-display     |                         | 关闭画面显示 }";
 
 int main(int argc, char * argv[])
@@ -605,30 +604,31 @@ int main(int argc, char * argv[])
   const OmniCamConfig left_cam_cfg{
     {omniperception::OmniCameraSlot::left, "left",
      read_cam_path("left", "omni_left_path", "video0"),
-     read_cli_or_yaml_double("left_yaw", "omni_left_yaw_deg", 60.0), omni_fov_v_deg,
-     omni_fov_h_deg},
+     read_cli_or_yaml_double("left_yaw", "omni_left_yaw_deg", 60.0), omni_fov_h_deg,
+     omni_fov_v_deg},
     read_cam_path("left", "omni_left_path", "video0"),
-    {0, 255, 0},
-    cv::ROTATE_90_CLOCKWISE};
+    {0, 255, 0}};
   const OmniCamConfig right_cam_cfg{
     {omniperception::OmniCameraSlot::right, "right",
      read_cam_path("right", "omni_right_path", "video2"),
-     read_cli_or_yaml_double("right_yaw", "omni_right_yaw_deg", -60.0), omni_fov_v_deg,
-     omni_fov_h_deg},
+     read_cli_or_yaml_double("right_yaw", "omni_right_yaw_deg", -60.0), omni_fov_h_deg,
+     omni_fov_v_deg},
     read_cam_path("right", "omni_right_path", "video2"),
-    {0, 255, 255},
-    cv::ROTATE_90_COUNTERCLOCKWISE};
+    {0, 255, 255}};
   const OmniCamConfig back_cam_cfg{
     {omniperception::OmniCameraSlot::back, "back",
      read_cam_path("back", "omni_back_path", "video4"),
      read_cli_or_yaml_double("back_yaw", "omni_back_yaw_deg", 180.0), omni_fov_h_deg,
      omni_fov_v_deg},
     read_cam_path("back", "omni_back_path", "video4"),
-    {255, 200, 0},
-    std::nullopt};
+    {255, 200, 0}};
 
   tools::logger()->info(
     "[OVSentryOmniMPC] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
+  tools::logger()->info(
+    "[OVSentryOmniMPC] omni center yaw(deg): left={:.1f} right={:.1f} back={:.1f}",
+    left_cam_cfg.spec.center_yaw_deg, right_cam_cfg.spec.center_yaw_deg,
+    back_cam_cfg.spec.center_yaw_deg);
 
   tools::Exiter exiter;
   tools::Plotter plotter;
@@ -909,9 +909,6 @@ int main(int argc, char * argv[])
         if (!ok || img.empty()) {
           img.release();
           return frame;
-        }
-        if (cam_cfg.rotation.has_value()) {
-          cv::rotate(img, img, cam_cfg.rotation.value());
         }
         frame.timestamp = ts;
         frame.base_big_yaw_rad = gimbal->big_yaw_at_image(ts);
