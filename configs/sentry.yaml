@@ -37,8 +37,8 @@ usb_gamma: 160
 usb_gain: 20 #0-96
 usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
 omni_camera_read_timeout_ms: 10
-omni_right_path: "/dev/video2"
-omni_left_path: "/dev/video0"
+omni_right_path: "/dev/video0"
+omni_left_path: "/dev/video2"
 omni_back_path: ""
 omni_left_yaw_deg: 120.0
 omni_right_yaw_deg: -120.0
