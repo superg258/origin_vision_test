@@ -37,9 +37,9 @@ usb_gamma: 160
 usb_gain: 20 #0-96
 usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
 omni_camera_read_timeout_ms: 10
-omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
-omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
-omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.1:1.0-video-index0"
+omni_right_path: "/dev/video2"
+omni_left_path: "/dev/video0"
+omni_back_path: ""
 omni_left_yaw_deg: 60.0
 omni_right_yaw_deg: -60.0
 omni_back_yaw_deg: 180.0
@@ -94,14 +94,14 @@ outpost_max_temp_lost_count: 75
 gimbal_axis_order: pitch_yaw # yaw_pitch: yaw轴在外；pitch_yaw: pitch轴在外
 
 #####-----aimer参数-----#####
-yaw_offset: 0.75 # degree -2.5
-pitch_offset: 4  # degree 2
+yaw_offset: 2.5 # degree -2.5
+pitch_offset: -2.5  # degree 2
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 resistance_k: 0.023 # 空气阻力系数
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.073 # s
-low_speed_delay_time: 0.065 # s
+low_speed_delay_time: 0.058 # s
 
 #####-----shooter参数-----#####
 first_tolerance: 5 # 近距离射击容差，degree
@@ -128,13 +128,14 @@ R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
 # Camera::read直接输出原始1440x1080传感器像素（不旋转/不镜像）；下列K、畸变和
 # R_camera2gimbal均按OpenCV原始x向右、y向下、z向前坐标定义。
-# 相机同理想情况的偏角: yaw1 pitch0.8 roll0.48 degree
+# 相机同理想情况的偏角: yaw-15.40 pitch5.06 roll80.99 degree
 R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
 t_camera2gimbal: [0.081834836810026332, 0.0038077150929364738, 0.087564665738670097]
 
-# 重投影误差: 0.1165px
-camera_matrix: [2399.4748161744578, 0, 704.5612023477014, 0, 2396.6288031279046, 561.1075528531336, 0, 0, 1]
-distort_coeffs: [-0.042862254497741906, -0.050059552061239479, 0.00041471324889858548, -0.002973373644576584, 0]
+
+# 重投影误差: 0.1281px
+camera_matrix: [2433.3288076236572, 0, 646.39331609299018, 0, 2431.9633549421087, 528.45890310433231, 0, 0, 1]
+distort_coeffs: [-0.050822363718653403, 0.25923790410118597, -0.0029062438788101989, -0.0071350967596258289, 0]
 
 #####-----planner-----#####
 fire_thresh: 0.0035

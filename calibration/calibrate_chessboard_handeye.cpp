@@ -1,10 +1,15 @@
 #include <fmt/core.h>
+#include <fmt/ranges.h>
 #include <yaml-cpp/yaml.h>
 
 #include <Eigen/Dense>
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <fstream>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/opencv.hpp>
+#include <utility>
 
 #include "tools/img_tools.hpp"
 #include "tools/math_tools.hpp"
@@ -26,18 +31,21 @@ std::vector<cv::Point3f> chessboard_corners_3d(
   return corners_3d;
 }
 
-Eigen::Quaterniond read_q(const std::string & q_path)
+bool read_q(const std::string & q_path, Eigen::Quaterniond & q)
 {
   std::ifstream q_file(q_path);
   double w, x, y, z;
-  q_file >> w >> x >> y >> z;
-  return {w, x, y, z};
+  if (!(q_file >> w >> x >> y >> z)) return false;
+
+  q = Eigen::Quaterniond(w, x, y, z);
+  if (!q.coeffs().allFinite() || q.norm() < 1e-9) return false;
+  q.normalize();
+  return true;
 }
 
 void load(
   const std::string & input_folder, const std::string & config_path,
-  std::vector<double> & R_gimbal2imubody_data, std::vector<cv::Mat> & R_gimbal2world_list,
-  std::vector<cv::Mat> & t_gimbal2world_list, std::vector<cv::Mat> & rvecs,
+  std::vector<Eigen::Matrix3d> & R_imubody2imuabs_list, std::vector<cv::Mat> & rvecs,
   std::vector<cv::Mat> & tvecs)
 {
   auto yaml = YAML::LoadFile(config_path);
@@ -45,12 +53,10 @@ void load(
   auto pattern_rows = yaml["pattern_rows"].as<int>();
   auto square_size_mm = yaml["square_size_mm"].as<double>();
   auto preview_scale = yaml["preview_scale"].as<double>(0.5);
-  R_gimbal2imubody_data = yaml["R_gimbal2imubody"].as<std::vector<double>>();
   auto camera_matrix_data = yaml["camera_matrix"].as<std::vector<double>>();
   auto distort_coeffs_data = yaml["distort_coeffs"].as<std::vector<double>>();
 
   cv::Size pattern_size(pattern_cols, pattern_rows);
-  Eigen::Matrix<double, 3, 3, Eigen::RowMajor> R_gimbal2imubody(R_gimbal2imubody_data.data());
   cv::Matx33d camera_matrix(camera_matrix_data.data());
   cv::Mat distort_coeffs(distort_coeffs_data);
 
@@ -64,12 +70,14 @@ void load(
     auto img = cv::imread(img_path);
     if (img.empty()) break;
 
-    Eigen::Quaterniond q = read_q(q_path);
+    Eigen::Quaterniond q;
+    if (!read_q(q_path, q)) {
+      fmt::print("[failure] {} - 四元数文件无效，跳过\n", q_path);
+      continue;
+    }
 
     Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
-    Eigen::Matrix3d R_gimbal2world =
-      R_gimbal2imubody.transpose() * R_imubody2imuabs * R_gimbal2imubody;
-    Eigen::Vector3d ypr = tools::eulers(R_gimbal2world, 2, 1, 0) * 57.3;
+    Eigen::Vector3d ypr = tools::eulers(R_imubody2imuabs, 2, 1, 0) * 180.0 / CV_PI;
 
     auto drawing = img.clone();
     tools::draw_text(drawing, fmt::format("yaw   {:.2f}", ypr[0]), {40, 40}, {0, 0, 255});
@@ -115,17 +123,13 @@ void load(
 
     success_count++;
 
-    cv::Mat t_gimbal2world = (cv::Mat_<double>(3, 1) << 0, 0, 0);
-    cv::Mat R_gimbal2world_cv;
-    cv::eigen2cv(R_gimbal2world, R_gimbal2world_cv);
     cv::Mat rvec, tvec;
     auto corners_3d = chessboard_corners_3d(pattern_size, square_size_mm);
     cv::solvePnP(
       corners_3d, corners_2d, camera_matrix, distort_coeffs, rvec, tvec, false,
       cv::SOLVEPNP_ITERATIVE);
 
-    R_gimbal2world_list.emplace_back(R_gimbal2world_cv);
-    t_gimbal2world_list.emplace_back(t_gimbal2world);
+    R_imubody2imuabs_list.emplace_back(R_imubody2imuabs);
     rvecs.emplace_back(rvec);
     tvecs.emplace_back(tvec);
   }
@@ -134,6 +138,85 @@ void load(
   if (success_count < 10) {
     fmt::print("警告: 标定数据量较少（建议至少15-20组），可能影响标定精度\n");
   }
+}
+
+struct HandeyeResult
+{
+  Eigen::Matrix3d R_gimbal2imubody;
+  cv::Mat R_camera2gimbal;
+  cv::Mat t_camera2gimbal;
+  Eigen::Vector3d ypr;
+  double offset_angle_deg;
+};
+
+std::vector<Eigen::Matrix3d> axis_mapping_candidates()
+{
+  std::vector<Eigen::Matrix3d> candidates;
+  std::array<int, 3> permutation{0, 1, 2};
+
+  do {
+    for (int sx : {-1, 1}) {
+      for (int sy : {-1, 1}) {
+        for (int sz : {-1, 1}) {
+          Eigen::Matrix3d R = Eigen::Matrix3d::Zero();
+          const std::array<int, 3> signs{sx, sy, sz};
+          for (int row = 0; row < 3; row++) R(row, permutation[row]) = signs[row];
+
+          // Only proper rotations are allowed. Reflections have determinant -1.
+          if (R.determinant() > 0.5) candidates.emplace_back(R);
+        }
+      }
+    }
+  } while (std::next_permutation(permutation.begin(), permutation.end()));
+
+  return candidates;
+}
+
+std::vector<double> matrix_row_major_data(const Eigen::Matrix3d & R)
+{
+  std::vector<double> data;
+  data.reserve(9);
+  for (int row = 0; row < 3; row++)
+    for (int col = 0; col < 3; col++) data.emplace_back(R(row, col));
+  return data;
+}
+
+HandeyeResult calibrate_with_axis_mapping(
+  const Eigen::Matrix3d & R_gimbal2imubody,
+  const std::vector<Eigen::Matrix3d> & R_imubody2imuabs_list,
+  const std::vector<cv::Mat> & rvecs, const std::vector<cv::Mat> & tvecs)
+{
+  std::vector<cv::Mat> R_gimbal2world_list;
+  std::vector<cv::Mat> t_gimbal2world_list;
+  R_gimbal2world_list.reserve(R_imubody2imuabs_list.size());
+  t_gimbal2world_list.reserve(R_imubody2imuabs_list.size());
+
+  for (const auto & R_imubody2imuabs : R_imubody2imuabs_list) {
+    Eigen::Matrix3d R_gimbal2world =
+      R_gimbal2imubody.transpose() * R_imubody2imuabs * R_gimbal2imubody;
+    cv::Mat R_gimbal2world_cv;
+    cv::eigen2cv(R_gimbal2world, R_gimbal2world_cv);
+    R_gimbal2world_list.emplace_back(R_gimbal2world_cv);
+    t_gimbal2world_list.emplace_back(cv::Mat::zeros(3, 1, CV_64F));
+  }
+
+  HandeyeResult result;
+  result.R_gimbal2imubody = R_gimbal2imubody;
+  cv::calibrateHandEye(
+    R_gimbal2world_list, t_gimbal2world_list, rvecs, tvecs, result.R_camera2gimbal,
+    result.t_camera2gimbal);
+  result.t_camera2gimbal /= 1e3;
+
+  Eigen::Matrix3d R_camera2gimbal_eigen;
+  cv::cv2eigen(result.R_camera2gimbal, R_camera2gimbal_eigen);
+  const Eigen::Matrix3d R_gimbal2ideal{{0, -1, 0}, {0, 0, -1}, {1, 0, 0}};
+  const Eigen::Matrix3d R_camera2ideal = R_gimbal2ideal * R_camera2gimbal_eigen;
+  result.ypr = tools::eulers(R_camera2ideal, 1, 0, 2) * 180.0 / CV_PI;
+
+  // Use the coordinate-independent SO(3) angle as the total installation-offset score.
+  const double cos_angle = std::clamp((R_camera2ideal.trace() - 1.0) / 2.0, -1.0, 1.0);
+  result.offset_angle_deg = std::acos(cos_angle) * 180.0 / CV_PI;
+  return result;
 }
 
 void print_yaml(
@@ -178,34 +261,58 @@ int main(int argc, char * argv[])
 
   fmt::print("\n=== 棋盘格手眼标定程序 ===\n\n");
 
-  std::vector<double> R_gimbal2imubody_data;
-  std::vector<cv::Mat> R_gimbal2world_list, t_gimbal2world_list;
+  std::vector<Eigen::Matrix3d> R_imubody2imuabs_list;
   std::vector<cv::Mat> rvecs, tvecs;
-  load(
-    input_folder, config_path, R_gimbal2imubody_data, R_gimbal2world_list, t_gimbal2world_list,
-    rvecs, tvecs);
+  load(input_folder, config_path, R_imubody2imuabs_list, rvecs, tvecs);
 
-  if (R_gimbal2world_list.empty()) {
+  if (R_imubody2imuabs_list.empty()) {
     fmt::print("错误: 没有有效的标定数据\n");
     return -1;
   }
 
-  fmt::print("\n开始手眼标定计算...\n");
+  const auto candidates = axis_mapping_candidates();
+  std::vector<HandeyeResult> results;
+  results.reserve(candidates.size());
 
-  cv::Mat R_camera2gimbal, t_camera2gimbal;
-  cv::calibrateHandEye(
-    R_gimbal2world_list, t_gimbal2world_list, rvecs, tvecs, R_camera2gimbal, t_camera2gimbal);
-  t_camera2gimbal /= 1e3;
+  fmt::print("\n开始遍历全部 {} 个合法轴映射...\n", candidates.size());
+  for (std::size_t i = 0; i < candidates.size(); i++) {
+    try {
+      auto result =
+        calibrate_with_axis_mapping(candidates[i], R_imubody2imuabs_list, rvecs, tvecs);
+      if (!std::isfinite(result.offset_angle_deg) || !cv::checkRange(result.R_camera2gimbal) ||
+          !cv::checkRange(result.t_camera2gimbal)) {
+        fmt::print("[{:02}] 数值无效，已跳过\n", i + 1);
+        continue;
+      }
 
-  fmt::print("标定计算完成！\n");
+      const auto mapping_data = matrix_row_major_data(result.R_gimbal2imubody);
+      fmt::print(
+        "[{:02}] 总偏角={:7.3f}°, yaw={:7.2f}°, pitch={:7.2f}°, roll={:7.2f}°, "
+        "R=[{}]\n",
+        i + 1, result.offset_angle_deg, result.ypr[0], result.ypr[1], result.ypr[2],
+        fmt::join(mapping_data, ", "));
+      results.emplace_back(std::move(result));
+    } catch (const cv::Exception & e) {
+      fmt::print("[{:02}] OpenCV 标定失败，已跳过: {}\n", i + 1, e.what());
+    }
+  }
 
-  Eigen::Matrix3d R_camera2gimbal_eigen;
-  cv::cv2eigen(R_camera2gimbal, R_camera2gimbal_eigen);
-  Eigen::Matrix3d R_gimbal2ideal{{0, -1, 0}, {0, 0, -1}, {1, 0, 0}};
-  Eigen::Matrix3d R_camera2ideal = R_gimbal2ideal * R_camera2gimbal_eigen;
-  Eigen::Vector3d ypr = tools::eulers(R_camera2ideal, 1, 0, 2) * 57.3;
+  if (results.empty()) {
+    fmt::print("错误: 所有轴映射均标定失败\n");
+    return -1;
+  }
 
-  print_yaml(R_gimbal2imubody_data, R_camera2gimbal, t_camera2gimbal, ypr);
+  const auto best = std::min_element(
+    results.begin(), results.end(), [](const HandeyeResult & a, const HandeyeResult & b) {
+      return a.offset_angle_deg < b.offset_angle_deg;
+    });
+
+  const auto R_gimbal2imubody_data = matrix_row_major_data(best->R_gimbal2imubody);
+  fmt::print(
+    "\n最优轴映射: 总偏角={:.3f}°, yaw={:.2f}°, pitch={:.2f}°, roll={:.2f}°\n",
+    best->offset_angle_deg, best->ypr[0], best->ypr[1], best->ypr[2]);
+  print_yaml(
+    R_gimbal2imubody_data, best->R_camera2gimbal, best->t_camera2gimbal, best->ypr);
 
   fmt::print("提示: 相机偏角表示相机安装的理想程度\n");
   fmt::print("      如果偏角较大（>5度），建议调整相机安装位置\n");

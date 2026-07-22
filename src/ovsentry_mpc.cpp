@@ -25,7 +25,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/yaml.hpp"
-
+#include "tools/recorder.hpp"
 namespace
 {
 const std::string keys =
@@ -117,7 +117,7 @@ int main(int argc, char * argv[])
 
   tools::Exiter exiter;
   tools::Plotter plotter;
-
+tools::Recorder recorder(30);
   const auto yaml = tools::load(config_path);
   const auto read_or = [&](const char * key, double fallback) {
     return yaml[key] ? yaml[key].as<double>() : fallback;
@@ -210,6 +210,7 @@ int main(int argc, char * argv[])
 
       const auto q_at_image = gimbal.try_imu_at_image(timestamp, status_timeout);
       const auto initial_gimbal_state = gimbal.state();
+      recorder.record(img, q_at_image.value_or(Eigen::Quaterniond::Identity()), timestamp);
       if (
         !q_at_image.has_value() || !q_at_image->coeffs().allFinite() ||
         q_at_image->norm() < 1e-6 ||
