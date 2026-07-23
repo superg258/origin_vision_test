@@ -2,21 +2,20 @@
 #define AUTO_AIM__TARGET_HPP
 
 #include <Eigen/Dense>
+
 #include <array>
 #include <chrono>
-#include <deque>
 #include <limits>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "armor.hpp"
+#include "outpost_target.hpp"
 #include "tools/extended_kalman_filter.hpp"
 
 namespace auto_aim
 {
-
-constexpr double OUTPOST_LAYER_SPACING = 0.1;
 
 class Target
 {
@@ -48,6 +47,9 @@ public:
   void set_outpost_association_debug(
     int best_id, const std::array<double, 3> & scores, double best_score,
     const std::string & reject_reason);
+  void set_outpost_layer_correction_debug(
+    int raw_id, int height_id, double raw_z_residual, double best_z_residual,
+    double z_improvement, int count, bool pending, bool applied);
 
   bool diverged() const;
   bool convergened();
@@ -56,60 +58,29 @@ public:
   bool checkinit();
 
 private:
-  int armor_num_;
-  int switch_count_;
-  int update_count_;
+  int armor_num_ = 0;
+  int switch_count_ = 0;
+  int update_count_ = 0;
 
-  bool is_switch_, is_converged_;
+  bool is_switch_ = false;
+  bool is_converged_ = false;
 
   tools::ExtendedKalmanFilter ekf_;
-  std::chrono::steady_clock::time_point t_;
+  std::chrono::steady_clock::time_point t_{};
+  std::optional<OutpostTarget> outpost_target_;
 
   bool has_last_observed_armor_ = false;
   Eigen::Vector4d last_observed_armor_xyza_{Eigen::Vector4d::Zero()};
   double last_observed_age_s_ = std::numeric_limits<double>::infinity();
 
-  struct OutpostObservation
-  {
-    std::chrono::steady_clock::time_point t;
-    Eigen::Vector3d xyz;
-    Eigen::Vector3d center;
-    double yaw = 0.0;
-  };
-
-  bool outpost_layer_locked_ = true;
-  int outpost_last_layer_ = 0;
-  std::deque<OutpostObservation> outpost_init_observations_;
-  static constexpr std::size_t OUTPOST_INIT_CACHE_LIMIT = 12;
-  bool outpost_preview_ready_ = false;
-  int outpost_preview_layer_ = -1;
-  double outpost_preview_omega_ = 0.0;
-  double outpost_preview_theta_ = 0.0;
-  double outpost_preview_base_z_ = 0.0;
-  double outpost_preview_base_vz_ = 0.0;
-  Eigen::Vector3d outpost_preview_center_{Eigen::Vector3d::Zero()};
-  Eigen::Vector2d outpost_preview_center_vxy_{Eigen::Vector2d::Zero()};
-  std::chrono::steady_clock::time_point outpost_preview_t_{};
-
   void update_ypda(const Armor & armor, int id);
   void record_observed_armor(const Armor & armor);
-  bool is_outpost_model() const;
-  Eigen::Vector3d outpost_center_from_armor(const Armor & armor) const;
-  Eigen::Vector4d predicted_unlocked_outpost_xyza() const;
-  void observe_unlocked_outpost(const Armor & armor);
-  bool try_lock_outpost_layers();
 
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
   Eigen::MatrixXd h_jacobian(const Eigen::VectorXd & x, int id) const;
 
   int match_armor_id(
-    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,
-    int measured_outpost_layer, int previous_outpost_layer);
-  int match_default_armor_id(
-    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list);
-  int match_outpost_armor_id(
-    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list,
-    int measured_outpost_layer, int previous_outpost_layer);
+    const Armor & armor, const std::vector<Eigen::Vector4d> & xyza_list) const;
 };
 
 }  // namespace auto_aim

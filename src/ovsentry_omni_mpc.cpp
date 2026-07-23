@@ -41,6 +41,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/yaml.hpp"
+#include "tools/recorder.hpp"
 
 namespace
 {
@@ -561,6 +562,7 @@ int main(int argc, char * argv[])
 
   tools::Exiter exiter;
   tools::Plotter plotter;
+  tools::Recorder recorder(30);
   const bool display = !cli.has("no-display");
   constexpr bool yolo_debug = false;
 
@@ -615,17 +617,14 @@ int main(int argc, char * argv[])
 
     frame_count++;
     Eigen::Quaterniond q = gimbal->imu_at_image(main_timestamp);
+    // recorder.record(main_img,q, main_timestamp);
     solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
     auto gimbal_mode = gimbal->mode();
     // Debug only: force small buff mode. Comment this line to use the gimbal-reported mode.
-    gimbal_mode = io::small_buff;
+      gimbal_mode = io::auto_aim;
     const bool small_buff_mode = gimbal_mode == io::small_buff;
     
-    // 强制使用小符模式（如果不是 buff 模式，则改为小符）
-  // if (!is_buff_mode(gimbal_mode)) { gimbal_mode = io::small_buff;}
-    
- //  const bool buff_mode = is_buff_mode(gimbal_mode);
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto t0 = std::chrono::steady_clock::now();
@@ -919,6 +918,13 @@ int main(int argc, char * argv[])
       command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
       fill_nav_target_info(command, targets);
 
+      const bool outpost_convergence = 
+      !targets.empty() && targets.front().name == auto_aim::ArmorName::outpost &&
+      (!targets.front().convergened() || targets.front().diverged());
+      if(outpost_convergence){
+        command = io::Command{false, false, 0.0, 0.0};
+      }
+      
       const bool unlocked_outpost =
         !targets.empty() && is_unlocked_outpost_target(targets.front());
       double small_yaw_vel = 0.0;

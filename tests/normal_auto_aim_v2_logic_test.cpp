@@ -193,7 +193,7 @@ int main()
     const auto predicted = target.armor_xyza_list();
     auto observed = make_world_armor(
       auto_aim::ArmorName::one, auto_aim::ArmorType::small, predicted[0].head(3), predicted[0][3]);
-    const int matched_id = target.match_default_armor_id(observed, predicted);
+    const int matched_id = target.match_armor_id(observed, predicted);
     if (!expect(matched_id == 0, "normal armor matching should not be held back by previous last_id bias")) {
       return 1;
     }

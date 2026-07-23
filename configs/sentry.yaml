@@ -1,5 +1,5 @@
 enemy_color: "red"
-#enemy_color: "blue"
+# enemy_color: "blue"
 
 
 #####-----神经网络参数-----#####
@@ -11,8 +11,8 @@ yolov5_model_path: assets/yolov5_0526.xml
 device: GPU
 auto_aim_device: GPU
 omni_device: NPU
-min_confidence: 0.8
-use_traditional: true
+min_confidence: 0.8 
+use_traditional: false
 
 #####-----ROI-----#####
 roi: 
@@ -36,9 +36,9 @@ usb_gamma: 160
 usb_gain: 20 #0-96
 usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
 omni_camera_read_timeout_ms: 10
-omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
+omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
 omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.2:1.0-video-index0"
-omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
+omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
 omni_left_yaw_deg: 60.0
 omni_right_yaw_deg: -60.0
 omni_back_yaw_deg: 180.0
@@ -48,7 +48,7 @@ omni_fov_v_deg: 67.0
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
 exposure_ms: 3
-gain: 15
+gain: 14
 vid_pid: "2bdf:0001"
 
 #####-----传统方法参数-----#####
@@ -92,7 +92,7 @@ outpost_layer_correction_z_gate: 0.06
 
 #####-----aimer参数-----#####
 yaw_offset: 0.75 # degree -2.5
-pitch_offset: -1 # degree 
+pitch_offset: -0.75 # degree 
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 outpost_aim_coming_angle: 70 # degree, front-facing outpost aim candidate window
@@ -156,5 +156,5 @@ IouThreshold: 0.2
 model: "assets/buff_repvgg.xml"
 
 #####-----buff_aimer参数-----#####
-fire_gap_time: 0.4 # s
-predict_time: 0.23 # s
+fire_gap_time: 0.3 # s
+predict_time: 0.0 # s

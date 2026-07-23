@@ -102,6 +102,12 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
+  outpost_layer_correction_enabled_ =
+    yaml["outpost_layer_correction_enabled"].as<bool>(true);
+  outpost_layer_correction_frames_ =
+    std::max(1, yaml["outpost_layer_correction_frames"].as<int>(3));
+  outpost_layer_correction_z_gate_ =
+    std::max(0.0, yaml["outpost_layer_correction_z_gate"].as<double>(0.06));
 
   YAML::Node priority_yaml;
   bool has_priority_yaml = false;
@@ -134,6 +140,73 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
 }
 
 std::string Tracker::state() const { return state_; }
+
+void Tracker::reset_outpost_layer_correction()
+{
+  outpost_layer_correction_candidate_ = -1;
+  outpost_layer_correction_count_ = 0;
+}
+
+Tracker::OutpostLayerCorrectionDecision Tracker::decide_outpost_layer_correction(
+  const Armor & armor, int raw_id,
+  const std::vector<Eigen::Vector4d> & predicted_armors)
+{
+  OutpostLayerCorrectionDecision decision;
+  decision.layer_id = raw_id;
+
+  if (
+    !outpost_layer_correction_enabled_ || !target_.outpost_layer_locked() ||
+    predicted_armors.size() != 3 || raw_id < 0 ||
+    raw_id >= static_cast<int>(predicted_armors.size())) {
+    reset_outpost_layer_correction();
+    target_.set_outpost_layer_correction_debug(
+      raw_id, -1, 0.0, 0.0, 0.0, 0, false, false);
+    return decision;
+  }
+
+  int height_id = 0;
+  double best_z_residual = std::numeric_limits<double>::infinity();
+  for (int id = 0; id < static_cast<int>(predicted_armors.size()); ++id) {
+    const double residual = std::abs(armor.xyz_in_world[2] - predicted_armors[id][2]);
+    if (residual < best_z_residual) {
+      best_z_residual = residual;
+      height_id = id;
+    }
+  }
+
+  const double raw_z_residual =
+    std::abs(armor.xyz_in_world[2] - predicted_armors[raw_id][2]);
+  const double improvement = raw_z_residual - best_z_residual;
+  if (height_id == raw_id || improvement < outpost_layer_correction_z_gate_) {
+    reset_outpost_layer_correction();
+    target_.set_outpost_layer_correction_debug(
+      raw_id, height_id, raw_z_residual, best_z_residual, improvement, 0, false, false);
+    return decision;
+  }
+
+  if (outpost_layer_correction_candidate_ == height_id) {
+    outpost_layer_correction_count_++;
+  } else {
+    outpost_layer_correction_candidate_ = height_id;
+    outpost_layer_correction_count_ = 1;
+  }
+
+  if (outpost_layer_correction_count_ < outpost_layer_correction_frames_) {
+    decision.defer_update = true;
+    target_.set_outpost_layer_correction_debug(
+      raw_id, height_id, raw_z_residual, best_z_residual, improvement,
+      outpost_layer_correction_count_, true, false);
+    return decision;
+  }
+
+  decision.layer_id = height_id;
+  decision.corrected = true;
+  target_.set_outpost_layer_correction_debug(
+    raw_id, height_id, raw_z_residual, best_z_residual, improvement,
+    outpost_layer_correction_count_, false, true);
+  reset_outpost_layer_correction();
+  return decision;
+}
 
 std::list<Target> Tracker::track(
   std::list<Armor> & armors, std::chrono::steady_clock::time_point t, bool use_enemy_color)
@@ -375,6 +448,7 @@ void Tracker::handle_large_dt(double dt)
 
 bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
+  reset_outpost_layer_correction();
   if (armors.empty()) return false;
 
   auto & armor = armors.front();
@@ -415,7 +489,11 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     if (armor.name != target_.name || armor.type != target_.armor_type) continue;
     candidates.push_back(&armor);
   }
-  if (candidates.empty()) return false;
+  if (candidates.empty()) {
+    reset_outpost_layer_correction();
+    target_.set_outpost_layer_correction_debug(-1, -1, 0.0, 0.0, 0.0, 0, false, false);
+    return false;
+  }
 
   const std::vector<Eigen::Vector4d> predicted_armors = target_.armor_xyza_list();
   const int predicted_count = static_cast<int>(predicted_armors.size());
@@ -470,16 +548,27 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     }
   }
 
-  if (best_armor == nullptr) return false;
+  if (best_armor == nullptr) {
+    reset_outpost_layer_correction();
+    target_.set_outpost_layer_correction_debug(-1, -1, 0.0, 0.0, 0.0, 0, false, false);
+    return false;
+  }
 
   const double reject_score = target_.outpost_layer_locked() ? 28.0 : 80.0;
   if (best_score > reject_score) {
+    reset_outpost_layer_correction();
+    target_.set_outpost_layer_correction_debug(
+      best_id, -1, 0.0, 0.0, 0.0, 0, false, false);
     target_.set_outpost_association_debug(best_id, best_scores, best_score, "score_gate");
     return false;
   }
 
   target_.set_outpost_association_debug(best_id, best_scores, best_score, "");
-  target_.update(*best_armor, best_id);
+  const auto correction =
+    decide_outpost_layer_correction(*best_armor, best_id, predicted_armors);
+  if (correction.defer_update) return false;
+
+  target_.update(*best_armor, correction.layer_id);
   return true;
 }
 

@@ -3,11 +3,10 @@
 #include <yaml-cpp/yaml.h>
 
 #include <filesystem>
-#include <memory>
-#include <string>
-#include <vector>
 #include <opencv2/opencv.hpp>
 #include <openvino/openvino.hpp>
+#include <string>
+#include <vector>
 
 #include "tools/logger.hpp"
 
@@ -45,11 +44,11 @@ private:
   ov::CompiledModel compiled_model;
   ov::InferRequest infer_request;
   ov::Tensor input_tensor;
-  static constexpr int NUM_POINTS = 9;     // raw model output keypoints
-  static constexpr int REMAPPED_KPTS = 6;  // remapped to old 6-pt layout for solver compatibility
-  static constexpr int NUM_CLASSES = 2;
-  static constexpr int KPT_DIM = 3;    // x, y, visibility per keypoint
-  static constexpr int KPT_START = 6;  // keypoints start at row 6 (after 4 bbox + 2 class)
+  static const int NUM_POINTS = 9;     // raw model output keypoints
+  static const int REMAPPED_KPTS = 6;  // remapped to old 6-pt layout for solver compatibility
+  static const int NUM_CLASSES = 2;
+  static const int KPT_DIM = 3;          // x, y, visibility per keypoint
+  static const int KPT_START = 6;        // keypoints start at row 6 (after 4 bbox + 2 class)
   int enemy_class_idx_ = 0;             // 0=red, 1=blue
   bool use_legacy_preprocess_ = false;
 
