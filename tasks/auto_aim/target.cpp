@@ -28,6 +28,7 @@ constexpr double OUTPOST_PREVIEW_MAX_Z_RESIDUAL = 0.10;
 constexpr double OUTPOST_PREVIEW_MAX_CENTER_SPEED = 8.0;
 constexpr double OUTPOST_PREVIEW_MAX_AGE = 0.35;
 constexpr double OUTPOST_PREVIEW_MIN_OMEGA_MARGIN = 0.02;
+constexpr int OUTPOST_INIT_MAX_OUTLIER_FRAMES = 1;
 
 double armor_angle_offset(int id, int armor_num, ArmorName name)
 {
@@ -629,6 +630,7 @@ bool Target::try_lock_outpost_layers()
 
   struct Hypothesis
   {
+    bool alive = true;
     double score = 0.0;
     double omega = 0.0;
     std::vector<int> layers;
@@ -638,6 +640,11 @@ bool Target::try_lock_outpost_layers()
     double base_vz = 0.0;
     double max_z_residual = 0.0;
     int distinct_layers = 0;
+    int outlier_count = 0;
+    int reject_reason = 0;
+    std::size_t last_valid_index = 0;
+    double base_z_min = -std::numeric_limits<double>::infinity();
+    double base_z_max = std::numeric_limits<double>::infinity();
   };
 
   constexpr double step = 2.0 * CV_PI / 3.0;
@@ -646,6 +653,13 @@ bool Target::try_lock_outpost_layers()
 
   std::vector<Hypothesis> hypotheses;
   hypotheses.reserve(6);
+
+  const auto phase_gate_from_distance = [](double distance) {
+    return std::clamp(0.24 + 0.012 * distance, 0.26, 0.42);
+  };
+  const auto z_gate_from_distance = [](double distance) {
+    return std::clamp(0.035 + 0.008 * distance, 0.06, 0.18);
+  };
 
   for (int first_layer = 0; first_layer < armor_num_; ++first_layer) {
     for (double omega : {OUTPOST_RULE_SPEED, -OUTPOST_RULE_SPEED}) {
@@ -661,7 +675,8 @@ bool Target::try_lock_outpost_layers()
       bool has_previous = false;
       std::array<bool, 3> layer_seen{false, false, false};
 
-      for (const auto & obs : outpost_init_observations_) {
+      for (std::size_t obs_index = 0; obs_index < outpost_init_observations_.size(); ++obs_index) {
+        const auto & obs = outpost_init_observations_[obs_index];
         const double dt = tools::delta_time(obs.t, first.t);
         const double theta = tools::limit_rad(theta0 + omega * dt);
 
@@ -677,7 +692,31 @@ bool Target::try_lock_outpost_layers()
           }
         }
 
+        const double distance = obs.xyz.norm();
+        if (best_phase_error > phase_gate_from_distance(distance)) {
+          hypothesis.outlier_count++;
+          hypothesis.reject_reason = 1;
+          hypothesis.alive =
+            hypothesis.outlier_count <= OUTPOST_INIT_MAX_OUTLIER_FRAMES;
+          if (!hypothesis.alive) break;
+          continue;
+        }
+
         const double base_z = obs.xyz[2] - spacing * static_cast<double>(best_layer);
+        const double z_gate = z_gate_from_distance(distance);
+        const double proposed_base_z_min = std::max(hypothesis.base_z_min, base_z - z_gate);
+        const double proposed_base_z_max = std::min(hypothesis.base_z_max, base_z + z_gate);
+        if (proposed_base_z_min > proposed_base_z_max) {
+          hypothesis.outlier_count++;
+          hypothesis.reject_reason = 2;
+          hypothesis.alive =
+            hypothesis.outlier_count <= OUTPOST_INIT_MAX_OUTLIER_FRAMES;
+          if (!hypothesis.alive) break;
+          continue;
+        }
+        hypothesis.base_z_min = proposed_base_z_min;
+        hypothesis.base_z_max = proposed_base_z_max;
+        hypothesis.last_valid_index = obs_index;
         hypothesis.layers.push_back(best_layer);
         hypothesis.base_zs.push_back(base_z);
         hypothesis.times.push_back(dt);
@@ -695,32 +734,64 @@ bool Target::try_lock_outpost_layers()
         has_previous = true;
       }
 
+      if (hypothesis.layers.empty()) hypothesis.alive = false;
       hypothesis.distinct_layers =
         static_cast<int>(layer_seen[0]) + static_cast<int>(layer_seen[1]) +
         static_cast<int>(layer_seen[2]);
-      const LineFitResult z_fit = fit_line(hypothesis.times, hypothesis.base_zs);
-      hypothesis.base_z0 = z_fit.intercept;
-      hypothesis.base_vz = z_fit.slope;
-      hypothesis.max_z_residual = z_fit.max_abs_residual;
-      hypothesis.score += 1.8 * z_fit.residual_score;
-      hypothesis.score += 0.45 * normalized_square(hypothesis.base_vz, OUTPOST_INIT_Z_VELOCITY_GATE);
-      if (std::abs(hypothesis.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY) {
+      if (hypothesis.alive) {
+        const LineFitResult z_fit = fit_line(hypothesis.times, hypothesis.base_zs);
+        hypothesis.base_z0 = z_fit.intercept;
+        hypothesis.base_vz = z_fit.slope;
+        hypothesis.max_z_residual = z_fit.max_abs_residual;
+        hypothesis.score += 1.8 * z_fit.residual_score;
         hypothesis.score +=
-          12.0 *
-          normalized_square(
-            std::abs(hypothesis.base_vz) - OUTPOST_INIT_Z_MAX_VELOCITY,
-            OUTPOST_INIT_Z_VELOCITY_GATE);
+          0.45 * normalized_square(hypothesis.base_vz, OUTPOST_INIT_Z_VELOCITY_GATE);
+        if (std::abs(hypothesis.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY) {
+          hypothesis.score +=
+            12.0 *
+            normalized_square(
+              std::abs(hypothesis.base_vz) - OUTPOST_INIT_Z_MAX_VELOCITY,
+              OUTPOST_INIT_Z_VELOCITY_GATE);
+        }
       }
       hypotheses.push_back(std::move(hypothesis));
     }
   }
 
+  int alive_count = 0;
+  for (std::size_t i = 0; i < hypotheses.size(); ++i) {
+    const auto & hypothesis = hypotheses[i];
+    alive_count += hypothesis.alive ? 1 : 0;
+    ekf_.data["init_hypothesis_" + std::to_string(i) + "_alive"] =
+      hypothesis.alive ? 1.0 : 0.0;
+    ekf_.data["init_hypothesis_" + std::to_string(i) + "_reason"] =
+      static_cast<double>(hypothesis.reject_reason);
+  }
+  ekf_.data["init_alive_hypotheses"] = static_cast<double>(alive_count);
+
+  if (alive_count == 0) {
+    const OutpostObservation latest = outpost_init_observations_.back();
+    outpost_init_observations_.clear();
+    outpost_init_observations_.push_back(latest);
+    outpost_preview_ready_ = false;
+    ekf_.data["init_preview_ready"] = 0.0;
+    ekf_.data["init_restarted"] = 1.0;
+    return false;
+  }
+  ekf_.data["init_restarted"] = 0.0;
+
+  hypotheses.erase(
+    std::remove_if(
+      hypotheses.begin(), hypotheses.end(),
+      [](const Hypothesis & hypothesis) { return !hypothesis.alive; }),
+    hypotheses.end());
   std::sort(
     hypotheses.begin(), hypotheses.end(),
     [](const Hypothesis & lhs, const Hypothesis & rhs) { return lhs.score < rhs.score; });
 
   const Hypothesis & best = hypotheses.front();
-  const double second_score = hypotheses.size() > 1 ? hypotheses[1].score : best.score;
+  const double second_score =
+    hypotheses.size() > 1 ? hypotheses[1].score : std::numeric_limits<double>::infinity();
   const double margin = second_score - best.score;
   double opposite_omega_score = std::numeric_limits<double>::infinity();
   for (const auto & hypothesis : hypotheses) {
@@ -737,7 +808,7 @@ bool Target::try_lock_outpost_layers()
   ekf_.data["init_z_max_residual"] = best.max_z_residual;
   ekf_.data["init_preview_ready"] = 0.0;
 
-  const auto & last_obs = outpost_init_observations_.back();
+  const auto & last_obs = outpost_init_observations_[best.last_valid_index];
   const int layer = best.layers.back();
   const double base_z = best.base_z0 + best.base_vz * best.times.back();
   const double theta = tools::limit_rad(last_obs.yaw + static_cast<double>(layer) * step);
@@ -747,8 +818,9 @@ bool Target::try_lock_outpost_layers()
     best.score <= OUTPOST_PREVIEW_MAX_SCORE &&
     omega_margin >= OUTPOST_PREVIEW_MIN_OMEGA_MARGIN &&
     best.max_z_residual <= OUTPOST_PREVIEW_MAX_Z_RESIDUAL &&
-    std::abs(best.base_vz) <= OUTPOST_INIT_Z_MAX_VELOCITY) {
-    const auto & prev_obs = outpost_init_observations_[outpost_init_observations_.size() - 2];
+    std::abs(best.base_vz) <= OUTPOST_INIT_Z_MAX_VELOCITY &&
+    best.last_valid_index + 1 == outpost_init_observations_.size()) {
+    const auto & prev_obs = outpost_init_observations_[best.last_valid_index - 1];
     const double dt = std::max(1e-3, tools::delta_time(last_obs.t, prev_obs.t));
 
     outpost_preview_layer_ = layer;
@@ -771,7 +843,8 @@ bool Target::try_lock_outpost_layers()
 
   if (outpost_init_observations_.size() < 3 || best.distinct_layers < 2 || best.score > 18.0 ||
       margin < 0.05 || best.max_z_residual > OUTPOST_INIT_Z_MAX_RESIDUAL ||
-      std::abs(best.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY) {
+      std::abs(best.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY ||
+      best.last_valid_index + 1 != outpost_init_observations_.size()) {
     return false;
   }
 
@@ -782,8 +855,8 @@ bool Target::try_lock_outpost_layers()
   ekf_.x[6] = theta;
   ekf_.x[7] = best.omega;
 
-  if (outpost_init_observations_.size() >= 2) {
-    const auto & prev_obs = outpost_init_observations_[outpost_init_observations_.size() - 2];
+  if (best.last_valid_index >= 1) {
+    const auto & prev_obs = outpost_init_observations_[best.last_valid_index - 1];
     const double dt = std::max(1e-3, tools::delta_time(last_obs.t, prev_obs.t));
     ekf_.x[1] = std::clamp((last_obs.center[0] - prev_obs.center[0]) / dt, -8.0, 8.0);
     ekf_.x[3] = std::clamp((last_obs.center[1] - prev_obs.center[1]) / dt, -8.0, 8.0);
