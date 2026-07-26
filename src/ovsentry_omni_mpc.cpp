@@ -4,6 +4,7 @@
 #include <fastcdr/FastBuffer.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -17,6 +18,7 @@
 
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 #include "io/camera.hpp"
 #include "io/ros2/ros2_gimbal.hpp"
@@ -214,6 +216,49 @@ private:
   bool self_initialized_ = false;
   std::shared_ptr<rclcpp::Node> node_;
   std::shared_ptr<rclcpp::GenericSubscription> subscription_;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
+  std::thread spin_thread_;
+};
+
+class BuffRequestSubscriber
+{
+public:
+  explicit BuffRequestSubscriber(const std::string & topic = "/request_buff")
+  {
+    if (!rclcpp::ok()) {
+      rclcpp::init(0, nullptr);
+      self_initialized_ = true;
+    }
+
+    node_ = std::make_shared<rclcpp::Node>("buff_request_subscriber");
+    subscription_ = node_->create_subscription<std_msgs::msg::Bool>(
+      topic, 10, [this](const std_msgs::msg::Bool::SharedPtr message) {
+        request_buff_.store(message->data);
+        tools::logger()->info(
+          "[BuffRequest] request_buff={}", message->data ? "true" : "false");
+      });
+
+    executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+    executor_->add_node(node_);
+    spin_thread_ = std::thread([this]() { executor_->spin(); });
+    tools::logger()->info("[BuffRequest] Subscribed '{}'.", topic);
+  }
+
+  ~BuffRequestSubscriber()
+  {
+    if (executor_) executor_->cancel();
+    if (spin_thread_.joinable()) spin_thread_.join();
+    if (executor_ && node_) executor_->remove_node(node_);
+    if (self_initialized_ && rclcpp::ok()) rclcpp::shutdown();
+  }
+
+  bool requested() const { return request_buff_.load(); }
+
+private:
+  std::atomic_bool request_buff_{false};
+  bool self_initialized_ = false;
+  std::shared_ptr<rclcpp::Node> node_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr subscription_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
   std::thread spin_thread_;
 };
@@ -568,6 +613,7 @@ int main(int argc, char * argv[])
 
   auto gimbal = std::make_unique<io::ROS2Gimbal>(config_path);
   ArmorIgnoreSubscriber armor_ignore_subscriber(auto_aim_ignore_topic, auto_aim_ignore_msg_type);
+  BuffRequestSubscriber buff_request_subscriber;
   auto auto_aim_camera = std::make_unique<io::Camera>(config_path);
 
   auto_aim::YOLO yolo_auto(config_path, yolo_debug, "auto_aim_device");
@@ -620,10 +666,7 @@ int main(int argc, char * argv[])
     // recorder.record(main_img,q, main_timestamp);
     solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
-    auto gimbal_mode = gimbal->mode();
-    // Debug only: force small buff mode. Comment this line to use the gimbal-reported mode.
-      gimbal_mode = io::auto_aim;
-    const bool small_buff_mode = gimbal_mode == io::small_buff;
+    const bool small_buff_mode = buff_request_subscriber.requested();
     
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
