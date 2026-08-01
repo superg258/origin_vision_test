@@ -435,6 +435,31 @@ Eigen::Vector4d Target::last_observed_armor_xyza() const { return last_observed_
 
 double Target::last_observed_age() const { return last_observed_age_s_; }
 
+void Target::clear_timing_debug_pair()
+{
+  has_timing_debug_pair_ = false;
+  timing_debug_detection_points_.clear();
+}
+
+void Target::set_timing_debug_pair(const Armor & armor, const Eigen::Vector4d & predicted_xyza)
+{
+  timing_debug_detection_points_ = armor.points;
+  timing_debug_prediction_xyza_ = predicted_xyza;
+  has_timing_debug_pair_ = true;
+}
+
+bool Target::has_timing_debug_pair() const { return has_timing_debug_pair_; }
+
+const std::vector<cv::Point2f> & Target::timing_debug_detection_points() const
+{
+  return timing_debug_detection_points_;
+}
+
+Eigen::Vector4d Target::timing_debug_prediction_xyza() const
+{
+  return timing_debug_prediction_xyza_;
+}
+
 bool Target::outpost_layer_locked() const { return !is_outpost_model() || outpost_layer_locked_; }
 
 bool Target::outpost_unlocked_prediction_ready() const

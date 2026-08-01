@@ -43,6 +43,11 @@ public:
   bool has_last_observed_armor() const;
   Eigen::Vector4d last_observed_armor_xyza() const;
   double last_observed_age() const;
+  void clear_timing_debug_pair();
+  void set_timing_debug_pair(const Armor & armor, const Eigen::Vector4d & predicted_xyza);
+  bool has_timing_debug_pair() const;
+  const std::vector<cv::Point2f> & timing_debug_detection_points() const;
+  Eigen::Vector4d timing_debug_prediction_xyza() const;
   bool outpost_layer_locked() const;
   bool outpost_unlocked_prediction_ready() const;
   void set_outpost_association_debug(
@@ -68,6 +73,12 @@ private:
   bool has_last_observed_armor_ = false;
   Eigen::Vector4d last_observed_armor_xyza_{Eigen::Vector4d::Zero()};
   double last_observed_age_s_ = std::numeric_limits<double>::infinity();
+
+  // The matched detection and its state prediction before the EKF update. This is display-only
+  // data used to calibrate image/IMU timing without hiding error through the current update.
+  bool has_timing_debug_pair_ = false;
+  std::vector<cv::Point2f> timing_debug_detection_points_;
+  Eigen::Vector4d timing_debug_prediction_xyza_{Eigen::Vector4d::Zero()};
 
   struct OutpostObservation
   {

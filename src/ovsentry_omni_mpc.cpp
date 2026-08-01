@@ -464,45 +464,46 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 }
 
 void draw_auto_aim_overlay(
-  cv::Mat & img, const std::list<auto_aim::Armor> & armors,
-  const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
-  const auto_aim::Solver & solver)
+  cv::Mat & img, const std::list<auto_aim::Target> & targets,
+  const auto_aim::Solver & solver, double timing_offset_ms)
 {
-  // Cyan is the detector observation in the current image. Yellow is the EKF's reprojected
-  // prediction. Keeping them separate makes image/IMU timing errors distinguishable from
-  // detector errors while the gimbal is moving.
-  for (const auto & armor : armors) {
-    tools::draw_points(img, armor.points, {255, 255, 0}, 1);
-  }
+  // Timing calibration needs only one same-frame pair. Showing all of a robot's armor plates,
+  // the ballistic aim point, and PnP round trips makes a correct multi-plate model look wrong.
+  constexpr cv::Scalar kDetectionColor{255, 255, 0};  // cyan
+  constexpr cv::Scalar kPredictionColor{0, 255, 255}; // yellow
 
-  if (targets.empty()) return;
+  tools::draw_text(
+    img, fmt::format("timing offset={:+.2f}ms", timing_offset_ms), {10, 90},
+    {220, 220, 220}, 0.7, 2);
+
+  if (targets.empty()) {
+    tools::draw_text(img, "timing pair: waiting for tracker", {10, 120}, {120, 120, 120}, 0.7, 2);
+    return;
+  }
 
   const auto & target = targets.front();
-  // Draw a same-frame PnP round trip separately from the EKF prediction. If this magenta shape
-  // does not match the cyan detector points, the issue is camera geometry/PnP rather than IMU
-  // timing or target tracking.
-  for (const auto & armor : armors) {
-    if (armor.name != target.name || armor.type != target.armor_type) continue;
-    auto solved_armor = armor;
-    solver.solve(solved_armor);
-    const auto image_points = solver.reproject_armor(
-      solved_armor.xyz_in_world, solved_armor.ypr_in_world[0], solved_armor.type,
-      solved_armor.name);
-    tools::draw_points(img, image_points, {255, 0, 255}, 1);
+  if (!target.has_timing_debug_pair()) {
+    tools::draw_text(img, "timing pair: no current detection", {10, 120}, {120, 120, 120}, 0.7, 2);
+    return;
   }
 
-  for (const auto & xyza : target.armor_xyza_list()) {
-    const auto image_points =
-      solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
-    tools::draw_points(img, image_points, {0, 255, 255});
-  }
+  const auto & detection_points = target.timing_debug_detection_points();
+  const auto predicted_xyza = target.timing_debug_prediction_xyza();
+  const auto predicted_points = solver.reproject_armor(
+    predicted_xyza.head(3), predicted_xyza[3], target.armor_type, target.name);
+  tools::draw_points(img, detection_points, kDetectionColor, 2);
+  tools::draw_points(img, predicted_points, kPredictionColor, 2);
 
-  const auto & aim_point = aimer.debug_aim_point;
-  if (aim_point.valid) {
-    const auto aim_image_points = solver.reproject_armor(
-      aim_point.xyza.head(3), aim_point.xyza[3], target.armor_type, target.name);
-    tools::draw_points(img, aim_image_points, {0, 0, 255});
+  const size_t point_count = std::min(detection_points.size(), predicted_points.size());
+  double squared_error_sum = 0.0;
+  for (size_t i = 0; i < point_count; ++i) {
+    const cv::Point2f delta = detection_points[i] - predicted_points[i];
+    squared_error_sum += delta.dot(delta);
   }
+  const double rms_error_px = point_count == 0 ? 0.0 : std::sqrt(squared_error_sum / point_count);
+  tools::draw_text(
+    img, fmt::format("cyan=detector  yellow=pre-EKF  rms={:.1f}px", rms_error_px), {10, 120},
+    {220, 220, 220}, 0.7, 2);
 }
 
 cv::Mat resize_for_view(const cv::Mat & img)
@@ -1318,7 +1319,7 @@ int main(int argc, char * argv[])
           buff_power_runes.has_value() ? 1 : 0, buff_target_solved ? 1 : 0),
         {10, 90}, {180, 255, 180}, 0.8, 2);
     } else {
-      draw_auto_aim_overlay(main_img, armors, targets, aimer, solver);
+      draw_auto_aim_overlay(main_img, targets, solver, gimbal->offset_ms());
     }
     const std::string mode_label = buff_mode ? buff_mode_name(gimbal_mode)
                                              : (omni_mode ? "OMNI" : "MPC");

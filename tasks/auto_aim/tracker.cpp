@@ -406,6 +406,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
   target_.predict(t);
+  target_.clear_timing_debug_pair();
 
   if (target_.name != ArmorName::outpost) {
     // A frame can contain more than one armor with the same number and type. Updating the
@@ -455,6 +456,7 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
       return false;
     }
 
+    target_.set_timing_debug_pair(*best_armor, predicted_armors[best_id]);
     target_.update(*best_armor, best_id);
     return true;
   }
