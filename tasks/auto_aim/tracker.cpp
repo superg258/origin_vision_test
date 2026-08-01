@@ -498,13 +498,16 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
           std::abs(tools::limit_rad(armor.ypd_in_world[1] - predicted_ypd[1]));
         const double dist_err = std::abs(armor.ypd_in_world[2] - predicted_ypd[2]);
         const double z_err = std::abs(armor.xyz_in_world[2] - xyza[2]);
+        // Fixed-armor PnP height error rises with range. Preserve the established near-range
+        // 8cm gate, then relax only the outpost association at longer range.
+        const double z_gate = std::clamp(0.035 + 0.008 * armor.ypd_in_world[2], 0.08, 0.18);
 
         score =
           1.0 * normalized_square(yaw_err, 0.45) +
           0.7 * normalized_square(bearing_err, 0.40) +
           0.4 * normalized_square(pitch_err, 0.30) +
           0.25 * normalized_square(dist_err, 0.60) +
-          0.8 * normalized_square(z_err, 0.08);
+          0.8 * normalized_square(z_err, z_gate);
 
         if (id == target_.last_id) score *= 0.95;
       }
