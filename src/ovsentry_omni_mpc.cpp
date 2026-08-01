@@ -478,6 +478,19 @@ void draw_auto_aim_overlay(
   if (targets.empty()) return;
 
   const auto & target = targets.front();
+  // Draw a same-frame PnP round trip separately from the EKF prediction. If this magenta shape
+  // does not match the cyan detector points, the issue is camera geometry/PnP rather than IMU
+  // timing or target tracking.
+  for (const auto & armor : armors) {
+    if (armor.name != target.name || armor.type != target.armor_type) continue;
+    auto solved_armor = armor;
+    solver.solve(solved_armor);
+    const auto image_points = solver.reproject_armor(
+      solved_armor.xyz_in_world, solved_armor.ypr_in_world[0], solved_armor.type,
+      solved_armor.name);
+    tools::draw_points(img, image_points, {255, 0, 255}, 1);
+  }
+
   for (const auto & xyza : target.armor_xyza_list()) {
     const auto image_points =
       solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
