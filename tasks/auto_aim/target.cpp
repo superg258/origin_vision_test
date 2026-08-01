@@ -28,6 +28,7 @@ constexpr double OUTPOST_PREVIEW_MAX_Z_RESIDUAL = 0.10;
 constexpr double OUTPOST_PREVIEW_MAX_CENTER_SPEED = 8.0;
 constexpr double OUTPOST_PREVIEW_MAX_AGE = 0.35;
 constexpr double OUTPOST_PREVIEW_MIN_OMEGA_MARGIN = 0.02;
+constexpr double OUTPOST_LOCK_MIN_OMEGA_MARGIN = 0.05;
 constexpr int OUTPOST_INIT_MAX_OUTLIER_FRAMES = 1;
 
 double armor_angle_offset(int id, int armor_num, ArmorName name)
@@ -208,8 +209,11 @@ void Target::predict(double dt)
     return x_prior;
   };
 
-  if (name == ArmorName::outpost && std::abs(ekf_.x[7]) > 3.4) {
-    ekf_.x[7] = ekf_.x[7] > 0 ? OUTPOST_RULE_SPEED : -OUTPOST_RULE_SPEED;
+  // The outpost rotates at the rule-defined angular speed. Once its layer and direction have
+  // been identified, keep the EKF's yaw-rate state on that model instead of letting individual
+  // PnP yaw updates slowly distort the long-horizon prediction.
+  if (is_outpost_model() && outpost_layer_locked_) {
+    ekf_.x[7] = ekf_.x[7] >= 0.0 ? OUTPOST_RULE_SPEED : -OUTPOST_RULE_SPEED;
   }
 
   ekf_.predict(F, Q, f);
@@ -842,7 +846,8 @@ bool Target::try_lock_outpost_layers()
   }
 
   if (outpost_init_observations_.size() < 3 || best.distinct_layers < 2 || best.score > 18.0 ||
-      margin < 0.05 || best.max_z_residual > OUTPOST_INIT_Z_MAX_RESIDUAL ||
+      margin < 0.05 || omega_margin < OUTPOST_LOCK_MIN_OMEGA_MARGIN ||
+      best.max_z_residual > OUTPOST_INIT_Z_MAX_RESIDUAL ||
       std::abs(best.base_vz) > OUTPOST_INIT_Z_MAX_VELOCITY ||
       best.last_valid_index + 1 != outpost_init_observations_.size()) {
     return false;

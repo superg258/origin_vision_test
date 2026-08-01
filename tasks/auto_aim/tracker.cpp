@@ -18,6 +18,15 @@ namespace auto_aim
 {
 namespace
 {
+constexpr double NORMAL_ASSOCIATION_MAX_SCORE = 40.0;
+
+double normalized_square(double value, double gate)
+{
+  const double safe_gate = gate <= 1e-6 ? 1e-6 : gate;
+  const double normalized = value / safe_gate;
+  return normalized * normalized;
+}
+
 std::string normalize_priority_key(std::string key)
 {
   std::string normalized;
@@ -399,14 +408,55 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
   target_.predict(t);
 
   if (target_.name != ArmorName::outpost) {
-    int found_count = 0;
+    // A frame can contain more than one armor with the same number and type. Updating the
+    // filter with every one of them mixes different robots into one target, which is especially
+    // visible once the gimbal moves and produces a large jump in the world-frame yaw command.
+    // Associate one observation against the predicted armor set before updating the EKF.
+    const std::vector<Eigen::Vector4d> predicted_armors = target_.armor_xyza_list();
+    Armor * best_armor = nullptr;
+    int best_id = -1;
+    double best_score = std::numeric_limits<double>::infinity();
+
     for (auto & armor : armors) {
       if (armor.name != target_.name || armor.type != target_.armor_type) continue;
-      found_count++;
       solver_.solve(armor);
-      target_.update(armor);
+
+      for (int id = 0; id < static_cast<int>(predicted_armors.size()); ++id) {
+        const Eigen::Vector4d & xyza = predicted_armors[id];
+        const Eigen::Vector3d predicted_ypd = tools::xyz2ypd(xyza.head(3));
+        const double yaw_err = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3]));
+        const double bearing_err =
+          std::abs(tools::limit_rad(armor.ypd_in_world[0] - predicted_ypd[0]));
+        const double pitch_err =
+          std::abs(tools::limit_rad(armor.ypd_in_world[1] - predicted_ypd[1]));
+        const double dist_err = std::abs(armor.ypd_in_world[2] - predicted_ypd[2]);
+        const double z_err = std::abs(armor.xyz_in_world[2] - xyza[2]);
+
+        double score =
+          1.0 * normalized_square(yaw_err, 0.45) +
+          0.7 * normalized_square(bearing_err, 0.40) +
+          0.4 * normalized_square(pitch_err, 0.30) +
+          0.25 * normalized_square(dist_err, 0.60) +
+          0.8 * normalized_square(z_err, 0.08);
+        if (id == target_.last_id) score *= 0.95;
+
+        if (score < best_score) {
+          best_score = score;
+          best_armor = &armor;
+          best_id = id;
+        }
+      }
     }
-    return found_count > 0;
+
+    if (best_armor == nullptr || best_score > NORMAL_ASSOCIATION_MAX_SCORE) {
+      tools::logger()->debug(
+        "[Tracker] normal armor association rejected: candidates={}, score={:.2f}",
+        armors.size(), best_score);
+      return false;
+    }
+
+    target_.update(*best_armor, best_id);
+    return true;
   }
 
   std::vector<Armor *> candidates;

@@ -464,16 +464,24 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 }
 
 void draw_auto_aim_overlay(
-  cv::Mat & img, const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
+  cv::Mat & img, const std::list<auto_aim::Armor> & armors,
+  const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
   const auto_aim::Solver & solver)
 {
+  // Cyan is the detector observation in the current image. Yellow is the EKF's reprojected
+  // prediction. Keeping them separate makes image/IMU timing errors distinguishable from
+  // detector errors while the gimbal is moving.
+  for (const auto & armor : armors) {
+    tools::draw_points(img, armor.points, {255, 255, 0}, 1);
+  }
+
   if (targets.empty()) return;
 
   const auto & target = targets.front();
   for (const auto & xyza : target.armor_xyza_list()) {
     const auto image_points =
       solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
-    tools::draw_points(img, image_points, {0, 255, 0});
+    tools::draw_points(img, image_points, {0, 255, 255});
   }
 
   const auto & aim_point = aimer.debug_aim_point;
@@ -1229,9 +1237,15 @@ int main(int argc, char * argv[])
     if (!targets.empty()) {
       const auto & target = targets.front();
       data["target_name"] = auto_aim::ARMOR_NAMES[target.name];
+      const auto & ekf_data = target.ekf().data;
+      for (const auto * key : {
+             "residual_yaw", "residual_pitch", "residual_distance", "residual_angle", "nis",
+             "recent_nis_failures"}) {
+        const auto iter = ekf_data.find(key);
+        if (iter != ekf_data.end()) data["tracker_" + std::string(key)] = iter->second;
+      }
       data["outpost_layer_locked"] = target.outpost_layer_locked() ? 1 : 0;
       data["outpost_preview_ready"] = target.outpost_unlocked_prediction_ready() ? 1 : 0;
-      const auto & ekf_data = target.ekf().data;
       if (ekf_data.count("init_preview_ready")) {
         data["init_preview_ready"] = ekf_data.at("init_preview_ready");
       }
@@ -1291,7 +1305,7 @@ int main(int argc, char * argv[])
           buff_power_runes.has_value() ? 1 : 0, buff_target_solved ? 1 : 0),
         {10, 90}, {180, 255, 180}, 0.8, 2);
     } else {
-      draw_auto_aim_overlay(main_img, targets, aimer, solver);
+      draw_auto_aim_overlay(main_img, armors, targets, aimer, solver);
     }
     const std::string mode_label = buff_mode ? buff_mode_name(gimbal_mode)
                                              : (omni_mode ? "OMNI" : "MPC");

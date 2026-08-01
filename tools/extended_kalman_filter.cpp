@@ -47,25 +47,31 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract)
 {
   Eigen::VectorXd x_prior = x;
-  Eigen::MatrixXd K = P * H.transpose() * (H * P * H.transpose() + R).inverse();
+  const Eigen::VectorXd residual = z_subtract(z, h(x));
+  const Eigen::MatrixXd S = H * P * H.transpose() + R;
+  Eigen::MatrixXd K = P * H.transpose() * S.inverse();
+
+  // NIS is defined from the innovation and covariance before the update. Evaluating it after
+  // applying K makes a valid observation look artificially inconsistent and can make Tracker
+  // repeatedly drop an otherwise stable target while the gimbal is moving.
+  const double nis = residual.transpose() * S.inverse() * residual;
 
   // Stable Compution of the Posterior Covariance
   // https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/07-Kalman-Filter-Math.ipynb
   P = (I - K * H) * P * (I - K * H).transpose() + K * R * K.transpose();
 
-  x = x_add(x, K * z_subtract(z, h(x)));
+  x = x_add(x, K * residual);
 
   /// 卡方检验
-  Eigen::VectorXd residual = z_subtract(z, h(x));
   // 新增检验
-  Eigen::MatrixXd S = H * P * H.transpose() + R;
-  double nis = residual.transpose() * S.inverse() * residual;
   double nees = (x - x_prior).transpose() * P.inverse() * (x - x_prior);
 
   // 卡方检验阈值（自由度=4，取置信水平95%）
-  constexpr double nis_threshold = 0.711;
+  constexpr double nis_threshold = 9.488;
   constexpr double nees_threshold = 0.711;
 
+  data["nis_fail"] = 0;
+  data["nees_fail"] = 0;
   if (nis > nis_threshold) nis_count_++, data["nis_fail"] = 1;
   if (nees > nees_threshold) nees_count_++, data["nees_fail"] = 1;
   total_count_++;
