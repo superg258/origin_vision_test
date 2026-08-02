@@ -112,7 +112,10 @@ high_spin_force_fire_enabled: true
 high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
-outpost_fire_max_angle: 18.0 # degree
+# Before the armor faces the shooter, wait for this many degrees; after it passes the center,
+# keep firing through outpost_fire_exit_angle. The directions follow the tracked rotation sign.
+outpost_fire_enter_angle: 8.0 # degree, smaller means later firing
+outpost_fire_exit_angle: 30.0 # degree, larger means longer firing while leaving
 
 #####-----decider参数-----#####
 mode: 1

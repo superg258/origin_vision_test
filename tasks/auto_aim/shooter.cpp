@@ -13,11 +13,11 @@ namespace auto_aim
 {
 namespace
 {
-double outpost_aim_phase_abs(const auto_aim::Target & target, const auto_aim::Aimer & aimer)
+double outpost_aim_phase(const auto_aim::Target & target, const auto_aim::Aimer & aimer)
 {
   const auto x = target.ekf_x();
   const double center_yaw = std::atan2(x[2], x[0]);
-  return std::abs(tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw));
+  return tools::limit_rad(aimer.debug_aim_point.xyza[3] - center_yaw);
 }
 }  // namespace
 
@@ -34,7 +34,11 @@ Shooter::Shooter(const std::string & config_path)
   high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(12.0);
   high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
   outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
-  outpost_fire_max_angle_ = yaml["outpost_fire_max_angle"].as<double>(18.0) / 57.3;
+  const double legacy_outpost_angle = yaml["outpost_fire_max_angle"].as<double>(18.0);
+  outpost_fire_enter_angle_ =
+    std::max(0.0, yaml["outpost_fire_enter_angle"].as<double>(legacy_outpost_angle)) / 57.3;
+  outpost_fire_exit_angle_ =
+    std::max(0.0, yaml["outpost_fire_exit_angle"].as<double>(legacy_outpost_angle)) / 57.3;
   if (high_spin_force_fire_exit_speed_ > high_spin_force_fire_enter_speed_) {
     high_spin_force_fire_exit_speed_ = std::max(0.0, high_spin_force_fire_enter_speed_ * 0.75);
   }
@@ -64,7 +68,13 @@ bool Shooter::shoot(
       return false;
     }
 
-    if (outpost_aim_phase_abs(target, aimer) > outpost_fire_max_angle_) {
+    const double phase = outpost_aim_phase(target, aimer);
+    const double yaw_rate = target.ekf_x()[7];
+    const bool phase_in_fire_window =
+      yaw_rate > 1e-3 ? (phase >= -outpost_fire_enter_angle_ && phase <= outpost_fire_exit_angle_)
+      : yaw_rate < -1e-3 ? (phase <= outpost_fire_enter_angle_ && phase >= -outpost_fire_exit_angle_)
+                         : std::abs(phase) <= std::min(outpost_fire_enter_angle_, outpost_fire_exit_angle_);
+    if (!phase_in_fire_window) {
       high_spin_force_fire_active_ = false;
       last_command_ = command;
       has_last_command_ = true;
