@@ -978,17 +978,30 @@ int main(int argc, char * argv[])
       clear_omni_redirect_state();
       buff_hold_command.reset();
 
-      command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
-      if (command.control && !targets.empty()) {
-        apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+      const bool armor_acquiring = tracker_state == "detecting";
+      if (armor_acquiring) {
+        // Do not steer from a just-initialized EKF. Hold control so navigation cannot patrol away
+        // while the tracker collects min_detect_count_ observations.
+        command.control = true;
+        command.shoot = false;
+        command.yaw = gimbal_state.yaw;
+        command.pitch = -gimbal_state.pitch;
+        command.big_yaw = gimbal_state.big_yaw;
+        command.small_yaw = gimbal_state.yaw;
+        command.has_target_yaw = true;
+      } else {
+        command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+        if (command.control && !targets.empty()) {
+          apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+        }
+        command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
+        fill_nav_target_info(command, targets);
       }
-      command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
-      fill_nav_target_info(command, targets);
 
       const bool outpost_convergence = 
       !targets.empty() && targets.front().name == auto_aim::ArmorName::outpost &&
       (!targets.front().convergened() || targets.front().diverged());
-      if(outpost_convergence){
+      if (!armor_acquiring && outpost_convergence) {
         command = io::Command{false, false, 0.0, 0.0};
       }
       
@@ -998,7 +1011,7 @@ int main(int argc, char * argv[])
       double pitch_vel = 0.0;
       double small_yaw_acc = 0.0;
       double pitch_acc = 0.0;
-      if (command.control && !targets.empty() && !unlocked_outpost) {
+      if (command.control && !armor_acquiring && !targets.empty() && !unlocked_outpost) {
         const auto mpc_plan = planner.plan(targets.front(), gimbal->bullet_speed());
         if (mpc_plan.control) {
           small_yaw_vel = mpc_plan.yaw_vel;
@@ -1021,6 +1034,7 @@ int main(int argc, char * argv[])
     data["gimbal_mode"] = io::MODES[static_cast<int>(gimbal_mode)];
     data["armor_num"] = armors.size();
     data["tracker_state"] = tracker_state;
+    data["armor_acquiring"] = (!small_buff_mode && tracker_state == "detecting") ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_small_yaw"] = gimbal_state.yaw * 57.3;
     data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
