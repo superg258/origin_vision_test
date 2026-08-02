@@ -44,6 +44,8 @@ private:
   double r_center_refine_max_shift_ = 5.0; // 传统细化相对模型R的最大修正量 px
   double dedup_distance_ = 18.0;      // 候选去重距离 px
   double small_assoc_max_jump_px_ = 140.0;  // 小符目标中心跨帧最大跳变
+  int small_assoc_reacquire_frames_ = 2;  // 连续跳变后重捕获所需帧数
+  int small_assoc_reject_count_ = 0;
   int lose_max_ = 20;                // 连续丢失阈值
   double lastlen_;
   std::optional<PowerRune> last_powerrune_ = std::nullopt;

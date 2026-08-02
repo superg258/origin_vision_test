@@ -51,6 +51,9 @@ Buff_Detector::Buff_Detector(const std::string & config) : status_(LOSE), lose_(
   if (yaml["dedup_distance"]) dedup_distance_ = yaml["dedup_distance"].as<double>();
   if (yaml["small_assoc_max_jump_px"])
     small_assoc_max_jump_px_ = yaml["small_assoc_max_jump_px"].as<double>();
+  if (yaml["small_assoc_reacquire_frames"])
+    small_assoc_reacquire_frames_ =
+      std::max(1, yaml["small_assoc_reacquire_frames"].as<int>());
   if (yaml["lose_max"]) lose_max_ = yaml["lose_max"].as<int>();
 }
 
@@ -146,6 +149,7 @@ std::vector<PowerRune> Buff_Detector::detect(cv::Mat & bgr_img, PowerRune_type r
 
   if (results.empty()) {
     /// 处理未获得的情况
+    small_assoc_reject_count_ = 0;
     handle_lose();
     return {};
   }
@@ -176,11 +180,22 @@ std::vector<PowerRune> Buff_Detector::detect(cv::Mat & bgr_img, PowerRune_type r
 
     const double best_jump = cv::norm(results.front().kpt[4] - last_center);
     if (best_jump > small_assoc_max_jump_px_) {
-      tools::logger()->debug(
-        "[Buff_Detector] skip SMALL obs by jump {:.1f}px > {:.1f}px", best_jump,
-        small_assoc_max_jump_px_);
-      handle_lose();
-      return {};
+      ++small_assoc_reject_count_;
+      if (small_assoc_reject_count_ < small_assoc_reacquire_frames_) {
+        tools::logger()->debug(
+          "[Buff_Detector] hold SMALL obs by jump {:.1f}px > {:.1f}px ({}/{})", best_jump,
+          small_assoc_max_jump_px_, small_assoc_reject_count_, small_assoc_reacquire_frames_);
+        handle_lose();
+        return {};
+      }
+
+      tools::logger()->info(
+        "[Buff_Detector] reacquire SMALL after {} jump frames ({:.1f}px)",
+        small_assoc_reject_count_, best_jump);
+      last_powerrune_.reset();
+      small_assoc_reject_count_ = 0;
+    } else {
+      small_assoc_reject_count_ = 0;
     }
   }
 
@@ -213,6 +228,7 @@ std::vector<PowerRune> Buff_Detector::detect(cv::Mat & bgr_img, PowerRune_type r
 
   if (powerrunes.empty()) {
     /// handle error
+    small_assoc_reject_count_ = 0;
     handle_lose();
     return {};
   }

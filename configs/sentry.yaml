@@ -128,6 +128,8 @@ omni_hold_release_tolerance_deg: 3.0 # omni重定向命令只有在big_yaw误差
 omni_command_timeout_s: 0.5 # omni目标命令若在该时间内未达到目标角度，则停止发送并保持lost
 main_lost_cmd_hold_s: 0.25 # 主相机tracker进入lost后，继续发送上一条主相机控制命令的持续时间
 buff_lost_cmd_hold_s: 0.30 # 小符检测或规划短暂失效时，继续占有云台且停火的持续时间
+small_assoc_max_jump_px: 140.0 # 小符检测中心相对上一帧的最大允许跳变，px
+small_assoc_reacquire_frames: 2 # 连续大跳变后立即重新锁定，避免长期沿用巡航前的旧目标
 
 #####-----工业相机标定参数-----#####
 
