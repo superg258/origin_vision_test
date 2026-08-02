@@ -1074,9 +1074,6 @@ int main(int argc, char * argv[])
     if (!targets.empty()) {
       const auto & target = targets.front();
       data["target_name"] = auto_aim::ARMOR_NAMES[target.name];
-      const auto target_x = target.ekf_x();
-      data["target_spin_speed_rad_s"] = target_x[7];
-      data["target_spin_speed_deg_s"] = target_x[7] * 57.3;
       data["outpost_layer_locked"] = target.outpost_layer_locked() ? 1 : 0;
       data["outpost_preview_ready"] = target.outpost_unlocked_prediction_ready() ? 1 : 0;
       const auto & ekf_data = target.ekf().data;
@@ -1134,12 +1131,6 @@ int main(int argc, char * argv[])
           (command.has_target_yaw ? command.small_yaw : command.yaw) * 57.3,
           command.pitch * 57.3, command.shoot ? 1 : 0),
         {10, 60}, {154, 50, 205}, 0.8, 2);
-      if (!omni_mode && !targets.empty()) {
-        const double spin_speed = targets.front().ekf_x()[7];
-        tools::draw_text(
-          main_img, fmt::format("spin={:.2f} rad/s ({:.0f} deg/s)", spin_speed, spin_speed * 57.3),
-          {10, 90}, {0, 255, 255}, 0.8, 2);
-      }
     }
     if (omni_target_abs_yaw_deg.has_value()) {
       tools::draw_text(main_img, fmt::format("omni target yaw={:.2f}", omni_target_abs_yaw_deg.value()),
