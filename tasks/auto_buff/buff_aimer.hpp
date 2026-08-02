@@ -39,6 +39,7 @@ private:
 
   double fire_gap_time_;
   double predict_time_;
+  double aim_radius_m_;
 
   int mistake_count_ = 0;
   bool switch_fanblade_;

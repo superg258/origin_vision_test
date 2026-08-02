@@ -161,3 +161,4 @@ model: "assets/buff_repvgg.xml"
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.3 # s
 predict_time: 0.0 # s
+buff_aim_radius_m: 0.70 # 小符最终瞄点半径；增大向外打，减小向内打
