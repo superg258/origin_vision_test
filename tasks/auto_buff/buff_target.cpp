@@ -54,8 +54,16 @@ void SmallTarget::get_target(
   if (!p.has_value()) {
     unsolvable_ = true;
     lost_cn++;
+    if (lost_cn > 6) {
+      tools::logger()->debug("[Target] 丢失buff");
+      lost_cn = 0;
+      first_in_ = true;
+    }
     return;
   }
+
+  // Count consecutive misses only. Otherwise isolated frame drops eventually force a reinit.
+  lost_cn = 0;
 
   static std::chrono::steady_clock::time_point start_timestamp = timestamp;
   auto time_gap = tools::delta_time(timestamp, start_timestamp);
@@ -65,15 +73,6 @@ void SmallTarget::get_target(
     unsolvable_ = true;
     init(time_gap, p.value());
     first_in_ = false;
-  }
-
-  // 处理识别时间间隔过大
-  if (lost_cn > 6) {
-    unsolvable_ = true;
-    tools::logger()->debug("[Target] 丢失buff");
-    lost_cn = 0;
-    first_in_ = true;
-    return;
   }
 
   // kalman update

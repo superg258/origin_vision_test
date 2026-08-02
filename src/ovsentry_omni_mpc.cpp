@@ -574,12 +574,16 @@ int main(int argc, char * argv[])
     yaml["omni_retarget_min_delta_deg"] ? yaml["omni_retarget_min_delta_deg"].as<double>() : 20.0;
   const double omni_command_timeout_s =
     yaml["omni_command_timeout_s"] ? yaml["omni_command_timeout_s"].as<double>() : 0.5;
+  const double buff_lost_cmd_hold_s =
+    yaml["buff_lost_cmd_hold_s"] ? yaml["buff_lost_cmd_hold_s"].as<double>() : 0.3;
   const auto omni_read_timeout = std::chrono::milliseconds(
     std::max(1, yaml["omni_camera_read_timeout_ms"] ? yaml["omni_camera_read_timeout_ms"].as<int>() : 10));
   const auto omni_retarget_cooldown = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_retarget_cooldown_s));
   const auto omni_command_timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(omni_command_timeout_s));
+  const auto buff_lost_cmd_hold = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(std::max(0.0, buff_lost_cmd_hold_s)));
   const std::string auto_aim_ignore_topic = yaml["auto_aim_ignore_topic"]
                                               ? yaml["auto_aim_ignore_topic"].as<std::string>()
                                               : "/request_auto_aim_ignore";
@@ -648,6 +652,8 @@ int main(int argc, char * argv[])
   std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
+  std::optional<io::Command> buff_hold_command;
+  std::chrono::steady_clock::time_point buff_last_control_at{};
   bool active_omni_timeout_running = false;
   bool prev_omni_mode = false;
   int frame_count = 0;
@@ -712,6 +718,7 @@ int main(int argc, char * argv[])
     auto_aim::Plan buff_plan{false, false, 0, 0, 0, 0, 0, 0, 0, 0};
     double buff_detect_ms = 0.0;
     bool buff_target_ready = false;
+    bool buff_command_held = false;
 
     auto clear_omni_timeout_session = [&]() {
         active_omni_timeout_target.reset();
@@ -765,11 +772,27 @@ int main(int argc, char * argv[])
       command.small_yaw = command.yaw;
       command.has_target_yaw = command.control;
 
+      if (command.control) {
+        buff_hold_command = command;
+        buff_last_control_at = now;
+      } else if (
+        buff_hold_command.has_value() &&
+        now - buff_last_control_at <= buff_lost_cmd_hold) {
+        // Keep navigation from reclaiming the gimbal for a brief detector/planner dropout.
+        command = buff_hold_command.value();
+        command.shoot = false;
+        buff_command_held = true;
+      }
+
       gimbal->send_mpc(
-        buff_plan.control, buff_plan.fire, command.big_yaw, command.small_yaw, buff_plan.pitch,
-        buff_plan.yaw_vel, buff_plan.pitch_vel, buff_plan.yaw_acc, buff_plan.pitch_acc, 0, 0.0,
+        command.control, command.shoot, command.big_yaw, command.small_yaw, command.pitch,
+        buff_command_held ? 0.0 : buff_plan.yaw_vel,
+        buff_command_held ? 0.0 : buff_plan.pitch_vel,
+        buff_command_held ? 0.0 : buff_plan.yaw_acc,
+        buff_command_held ? 0.0 : buff_plan.pitch_acc, 0, 0.0,
         0.0, 0.0);
     } else if (omni_mode) {
+      buff_hold_command.reset();
       auto read_omni_frame = [&](io::USBCamera & camera, cv::Mat & img,
                                  std::chrono::steady_clock::time_point & ts,
                                  const OmniCamConfig & cam_cfg) {
@@ -953,6 +976,7 @@ int main(int argc, char * argv[])
       right_img.release();
       back_img.release();
       clear_omni_redirect_state();
+      buff_hold_command.reset();
 
       command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
       if (command.control && !targets.empty()) {
@@ -1015,6 +1039,7 @@ int main(int argc, char * argv[])
     if (small_buff_mode) {
       data["buff_detected"] = buff_power_rune.has_value() ? 1 : 0;
       data["buff_target_ready"] = buff_target_ready ? 1 : 0;
+      data["buff_command_held"] = buff_command_held ? 1 : 0;
       data["buff_detect_ms"] = buff_detect_ms;
       data["buff_yaw"] = buff_plan.yaw * 57.3;
       data["buff_pitch"] = buff_plan.pitch * 57.3;
