@@ -28,6 +28,8 @@ Planner::Planner(const std::string & config_path)
   decision_speed_ = tools::read<double>(yaml, "decision_speed");
   high_speed_delay_time_ = tools::read<double>(yaml, "high_speed_delay_time");
   low_speed_delay_time_ = tools::read<double>(yaml, "low_speed_delay_time");
+  outpost_prediction_offset_s_ = yaml["outpost_prediction_offset_s"].as<double>(0.0);
+  if (!std::isfinite(outpost_prediction_offset_s_)) outpost_prediction_offset_s_ = 0.0;
 
   setup_yaw_solver(config_path);
   setup_pitch_solver(config_path);
@@ -56,8 +58,11 @@ SentryPlan Planner::plan_sentry_world(
   try {
     const auto x = target->ekf_x();
     if (x.size() < 8 || !x.allFinite()) throw std::runtime_error("Invalid target state");
-    const double delay_time =
+    double delay_time =
       std::abs(x[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+    if (target->name == ArmorName::outpost) {
+      delay_time = std::max(0.0, delay_time + outpost_prediction_offset_s_);
+    }
     if (!std::isfinite(delay_time)) throw std::runtime_error("Invalid processing delay");
     const auto future =
       std::chrono::steady_clock::now() + std::chrono::microseconds(int(delay_time * 1e6));

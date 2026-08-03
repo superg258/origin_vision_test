@@ -35,8 +35,9 @@ Shooter::Shooter(const std::string & config_path)
   high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
   outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
   const double legacy_outpost_angle = yaml["outpost_fire_max_angle"].as<double>(18.0);
+  // Negative enter angles intentionally delay fire until the armor has passed the center.
   outpost_fire_enter_angle_ =
-    std::max(0.0, yaml["outpost_fire_enter_angle"].as<double>(legacy_outpost_angle)) / 57.3;
+    yaml["outpost_fire_enter_angle"].as<double>(legacy_outpost_angle) / 57.3;
   outpost_fire_exit_angle_ =
     std::max(0.0, yaml["outpost_fire_exit_angle"].as<double>(legacy_outpost_angle)) / 57.3;
   if (high_spin_force_fire_exit_speed_ > high_spin_force_fire_enter_speed_) {

@@ -102,6 +102,8 @@ resistance_k: 0.023 # 空气阻力系数
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.073 # s
 low_speed_delay_time: 0.058 # s
+# Extra prediction time for the outpost only. Negative values reduce its aim lead.
+outpost_prediction_offset_s: -0.040
 
 #####-----shooter参数-----#####
 first_tolerance: 5 # 近距离射击容差，degree
@@ -113,8 +115,9 @@ high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
 # Before the armor faces the shooter, wait for this many degrees; after it passes the center,
-# keep firing through outpost_fire_exit_angle. The directions follow the tracked rotation sign.
-outpost_fire_enter_angle: 8.0 # degree, smaller means later firing
+# keep firing through outpost_fire_exit_angle. Negative enter values delay fire until after center.
+# The directions follow the tracked rotation sign.
+outpost_fire_enter_angle: -5.0 # degree, starts firing 5 degrees after facing the shooter
 outpost_fire_exit_angle: 30.0 # degree, larger means longer firing while leaving
 
 #####-----decider参数-----#####

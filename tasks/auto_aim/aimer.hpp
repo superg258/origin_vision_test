@@ -44,6 +44,7 @@ private:
   double leaving_angle_;
   double high_speed_delay_time_;
   double low_speed_delay_time_;
+  double outpost_prediction_offset_s_;
   double decision_speed_;
   tools::GimbalAxisOrder gimbal_axis_order_;
   int lock_id_ = -1;

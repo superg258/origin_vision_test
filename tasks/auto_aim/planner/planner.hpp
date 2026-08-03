@@ -57,6 +57,7 @@ private:
   double pitch_offset_;
   double fire_thresh_;
   double low_speed_delay_time_, high_speed_delay_time_, decision_speed_;
+  double outpost_prediction_offset_s_;
   tools::GimbalAxisOrder gimbal_axis_order_;
 
   TinySolver * yaw_solver_;

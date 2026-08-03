@@ -30,6 +30,8 @@ Aimer::Aimer(const std::string & config_path)
   resistance_k_ = yaml["resistance_k"].as<double>(0.01);
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
   low_speed_delay_time_ = yaml["low_speed_delay_time"].as<double>();
+  outpost_prediction_offset_s_ = yaml["outpost_prediction_offset_s"].as<double>(0.0);
+  if (!std::isfinite(outpost_prediction_offset_s_)) outpost_prediction_offset_s_ = 0.0;
   decision_speed_ = yaml["decision_speed"].as<double>();
   if (yaml["left_yaw_offset"].IsDefined() && yaml["right_yaw_offset"].IsDefined()) {
     left_yaw_offset_ = yaml["left_yaw_offset"].as<double>() / 57.3;
@@ -52,8 +54,11 @@ io::Command Aimer::aim_with_yaw_offset(
   if (targets.empty()) return {false, false, 0, 0};
   auto target = targets.front();
 
-  const double delay_time =
+  double delay_time =
     std::abs(target.ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+  if (target.name == ArmorName::outpost) {
+    delay_time = std::max(0.0, delay_time + outpost_prediction_offset_s_);
+  }
 
   if (bullet_speed < 14) bullet_speed = 23;
 
