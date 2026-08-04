@@ -142,6 +142,7 @@ int main(int argc, char * argv[])
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Planner planner(config_path);
+  auto_aim::Shooter shooter(config_path);
 
   cv::Mat img;
   PoseSample pose;
@@ -209,6 +210,16 @@ int main(int argc, char * argv[])
       big_yaw = sentry_plan.big_yaw;
     }
 
+    io::Command replay_command{mpc_plan.control, false, mpc_plan.yaw, mpc_plan.pitch};
+    replay_command.small_yaw = mpc_plan.yaw;
+    replay_command.big_yaw = big_yaw;
+    replay_command.has_target_yaw = true;
+    const Eigen::Vector3d replay_gimbal_ypr{world_ypr[0], world_ypr[1], 0.0};
+    (void)shooter.shoot(replay_command, aimer, targets, replay_gimbal_ypr, tracker_ready);
+    const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
+    const bool replay_fire =
+      mpc_plan.control && tracker_ready && (high_spin_force_fire || mpc_plan.fire);
+
     if (!targets.empty()) {
       const auto & target = targets.front();
       for (const Eigen::Vector4d & xyza : target.armor_xyza_list()) {
@@ -240,7 +251,7 @@ int main(int argc, char * argv[])
       img,
       fmt::format(
         "MPC control={} fire={} aim_id={} source={}", mpc_plan.control ? 1 : 0,
-        mpc_plan.fire ? 1 : 0, aimer.debug_aim_point.armor_id, aimer.debug_aim_point.source),
+        replay_fire ? 1 : 0, aimer.debug_aim_point.armor_id, aimer.debug_aim_point.source),
       {10, 90}, {0, 255, 0});
     tools::draw_text(
       img,
@@ -256,7 +267,9 @@ int main(int argc, char * argv[])
     data["gimbal_world_yaw"] = world_ypr[0] * 57.3;
     data["gimbal_world_pitch"] = world_ypr[1] * 57.3;
     data["mpc_control"] = mpc_plan.control ? 1 : 0;
-    data["mpc_fire"] = mpc_plan.fire ? 1 : 0;
+    data["mpc_fire"] = replay_fire ? 1 : 0;
+    data["mpc_plan_fire"] = mpc_plan.fire ? 1 : 0;
+    data["high_spin_force_fire_active"] = high_spin_force_fire ? 1 : 0;
     data["mpc_small_yaw"] = mpc_plan.yaw * 57.3;
     data["mpc_big_yaw"] = big_yaw * 57.3;
     data["mpc_pitch"] = mpc_plan.pitch * 57.3;

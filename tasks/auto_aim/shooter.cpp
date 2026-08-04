@@ -84,12 +84,15 @@ bool Shooter::shoot(
   }
 
   // Outpost fire is governed solely by its lock, phase, alignment, and MPC gates.
-  // High-spin force fire applies only to regular armor targets.
-  if (target.name == ArmorName::outpost || !high_spin_force_fire_enabled_ || !aim_locked) {
+  // For regular armor, latch high-spin mode using angular-speed hysteresis. A transient
+  // aim-point selection failure must not repeatedly leave and re-enter spraying mode.
+  if (
+    target.name == ArmorName::outpost || !high_spin_force_fire_enabled_ ||
+    !std::isfinite(angular_speed)) {
     high_spin_force_fire_active_ = false;
   } else if (high_spin_force_fire_active_) {
     if (angular_speed < high_spin_force_fire_exit_speed_) high_spin_force_fire_active_ = false;
-  } else if (angular_speed > high_spin_force_fire_enter_speed_) {
+  } else if (angular_speed >= high_spin_force_fire_enter_speed_) {
     high_spin_force_fire_active_ = true;
   }
 
