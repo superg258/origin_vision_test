@@ -19,6 +19,9 @@ public:
     bool tracker_tracking);
 
   bool high_spin_force_fire_active() const { return high_spin_force_fire_active_; }
+  bool high_spin_force_fire_enabled() const { return high_spin_force_fire_enabled_; }
+  double high_spin_force_fire_enter_speed() const { return high_spin_force_fire_enter_speed_; }
+  double high_spin_force_fire_exit_speed() const { return high_spin_force_fire_exit_speed_; }
 
 private:
   io::Command last_command_;

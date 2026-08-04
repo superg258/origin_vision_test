@@ -14,6 +14,7 @@
 
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
+#include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -270,6 +271,9 @@ int main(int argc, char * argv[])
     data["mpc_fire"] = replay_fire ? 1 : 0;
     data["mpc_plan_fire"] = mpc_plan.fire ? 1 : 0;
     data["high_spin_force_fire_active"] = high_spin_force_fire ? 1 : 0;
+    data["high_spin_force_fire_enabled"] = shooter.high_spin_force_fire_enabled() ? 1 : 0;
+    data["high_spin_force_fire_enter_speed"] = shooter.high_spin_force_fire_enter_speed();
+    data["high_spin_force_fire_exit_speed"] = shooter.high_spin_force_fire_exit_speed();
     data["mpc_small_yaw"] = mpc_plan.yaw * 57.3;
     data["mpc_big_yaw"] = big_yaw * 57.3;
     data["mpc_pitch"] = mpc_plan.pitch * 57.3;
@@ -289,6 +293,8 @@ int main(int argc, char * argv[])
       data["target_z"] = x[4];
       data["target_vz"] = x[5];
       data["target_w"] = x[7];
+      data["target_is_outpost"] =
+        targets.front().name == auto_aim::ArmorName::outpost ? 1 : 0;
     }
     plotter.plot(data);
 

@@ -1277,6 +1277,11 @@ int main(int argc, char * argv[])
     data["main_lost_cmd_hold_remaining_ms"] = main_lost_cmd_hold_remaining_ms;
     data["high_spin_force_fire_active"] =
       (!buff_mode && !omni_mode && shooter.high_spin_force_fire_active()) ? 1 : 0;
+    data["high_spin_force_fire_enabled"] = shooter.high_spin_force_fire_enabled() ? 1 : 0;
+    data["high_spin_force_fire_enter_speed"] = shooter.high_spin_force_fire_enter_speed();
+    data["high_spin_force_fire_exit_speed"] = shooter.high_spin_force_fire_exit_speed();
+    data["mpc_setpoint_fire_ready"] =
+      main_mpc_setpoint.has_value() && main_mpc_setpoint->fire_ready ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_small_yaw"] = gimbal_state.yaw * 57.3;
     data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
@@ -1337,6 +1342,7 @@ int main(int argc, char * argv[])
     if (!targets.empty()) {
       const auto & target = targets.front();
       data["target_name"] = auto_aim::ARMOR_NAMES[target.name];
+      data["target_is_outpost"] = target.name == auto_aim::ArmorName::outpost ? 1 : 0;
       data["target_angular_speed"] = std::abs(target.ekf_x()[7]);
       data["target_angular_speed_deg_s"] = std::abs(target.ekf_x()[7]) * 57.3;
       const auto & ekf_data = target.ekf().data;
