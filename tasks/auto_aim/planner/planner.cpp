@@ -37,21 +37,23 @@ Planner::Planner(const std::string & config_path)
 
 Plan Planner::plan(Target target, double bullet_speed)
 {
-  return plan_impl(std::move(target), bullet_speed, false, nullptr, std::nullopt);
+  return plan_impl(std::move(target), bullet_speed, false, nullptr, std::nullopt, false);
 }
 
 SentryPlan Planner::plan_sentry_world(
-  Target target, double bullet_speed, std::optional<int> preferred_armor_id)
+  Target target, double bullet_speed, std::optional<int> preferred_armor_id, bool aim_center)
 {
   SentryPlan sentry_plan;
   sentry_plan.world_small_yaw_plan =
     plan_impl(
-      std::move(target), bullet_speed, true, &sentry_plan.big_yaw, preferred_armor_id);
+      std::move(target), bullet_speed, true, &sentry_plan.big_yaw, preferred_armor_id,
+      aim_center);
   return sentry_plan;
 }
 
 SentryPlan Planner::plan_sentry_world(
-  std::optional<Target> target, double bullet_speed, std::optional<int> preferred_armor_id)
+  std::optional<Target> target, double bullet_speed, std::optional<int> preferred_armor_id,
+  bool aim_center)
 {
   if (!target.has_value()) return {};
 
@@ -67,7 +69,8 @@ SentryPlan Planner::plan_sentry_world(
     const auto future =
       std::chrono::steady_clock::now() + std::chrono::microseconds(int(delay_time * 1e6));
     target->predict(future);
-    return plan_sentry_world(std::move(target.value()), bullet_speed, preferred_armor_id);
+    return plan_sentry_world(
+      std::move(target.value()), bullet_speed, preferred_armor_id, aim_center);
   } catch (const std::exception & e) {
     tools::logger()->warn("[Planner] sentry prediction rejected: {}", e.what());
     return {};
@@ -76,7 +79,7 @@ SentryPlan Planner::plan_sentry_world(
 
 Plan Planner::plan_impl(
   Target target, double bullet_speed, bool sentry_world, double * sentry_big_yaw,
-  std::optional<int> preferred_armor_id)
+  std::optional<int> preferred_armor_id, bool aim_center)
 {
   // 0. Check bullet speed
   if (bullet_speed < 10 || bullet_speed > 25) {
@@ -88,8 +91,8 @@ Plan Planner::plan_impl(
   double yaw0;
   Trajectory traj;
   try {
-    const auto selected_armor = select_armor(target, preferred_armor_id);
-    const Eigen::Vector3d xyz = selected_armor.head<3>();
+    const auto selected_aim_point = select_aim_point(target, preferred_armor_id, aim_center);
+    const Eigen::Vector3d xyz = selected_aim_point.head<3>();
     const double min_dist = xyz.head<2>().norm();
     auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
     if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
@@ -101,8 +104,9 @@ Plan Planner::plan_impl(
     }
 
     // 2. Get trajectory
-    yaw0 = aim(target, bullet_speed, sentry_world, preferred_armor_id)(0);
-    traj = get_trajectory(target, yaw0, bullet_speed, sentry_world, preferred_armor_id);
+    yaw0 = aim(target, bullet_speed, sentry_world, preferred_armor_id, aim_center)(0);
+    traj =
+      get_trajectory(target, yaw0, bullet_speed, sentry_world, preferred_armor_id, aim_center);
     if (!std::isfinite(yaw0) || !traj.allFinite()) {
       throw std::runtime_error("Non-finite target trajectory");
     }
@@ -245,11 +249,12 @@ void Planner::setup_pitch_solver(const std::string & config_path)
 
 Eigen::Matrix<double, 2, 1> Planner::aim(
   const Target & target, double bullet_speed, bool sentry_world,
-  std::optional<int> preferred_armor_id)
+  std::optional<int> preferred_armor_id, bool aim_center)
 {
-  const Eigen::Vector4d selected_armor = select_armor(target, preferred_armor_id);
-  const Eigen::Vector3d xyz = selected_armor.head<3>();
-  const double yaw = selected_armor[3];
+  const Eigen::Vector4d selected_aim_point =
+    select_aim_point(target, preferred_armor_id, aim_center);
+  const Eigen::Vector3d xyz = selected_aim_point.head<3>();
+  const double yaw = selected_aim_point[3];
   const double min_dist = xyz.head<2>().norm();
   debug_xyza = Eigen::Vector4d(xyz.x(), xyz.y(), xyz.z(), yaw);
 
@@ -269,6 +274,23 @@ Eigen::Matrix<double, 2, 1> Planner::aim(
   }
 
   return tools::gimbal_command_from_yaw_elevation(world_yaw, elevation, gimbal_axis_order_);
+}
+
+Eigen::Vector4d Planner::select_aim_point(
+  const Target & target, std::optional<int> preferred_armor_id, bool aim_center) const
+{
+  if (!aim_center) return select_armor(target, preferred_armor_id);
+
+  const auto x = target.ekf_x();
+  if (x.size() < 8 || !x.allFinite()) {
+    throw std::runtime_error("Invalid target center state");
+  }
+
+  // x[4] is the lower armor-plane height. For four-armor targets x[10] is the alternating
+  // height difference, so their midpoint is a better vertical vehicle center.
+  double center_z = x[4];
+  if (x.size() > 10 && std::isfinite(x[10])) center_z += 0.5 * x[10];
+  return {x[0], x[2], center_z, x[6]};
 }
 
 Eigen::Vector4d Planner::select_armor(
@@ -295,19 +317,19 @@ Eigen::Vector4d Planner::select_armor(
 
 Trajectory Planner::get_trajectory(
   Target & target, double yaw0, double bullet_speed, bool sentry_world,
-  std::optional<int> preferred_armor_id)
+  std::optional<int> preferred_armor_id, bool aim_center)
 {
   Trajectory traj;
 
   target.predict(-DT * (HALF_HORIZON + 1));
-  auto yaw_pitch_last = aim(target, bullet_speed, sentry_world, preferred_armor_id);
+  auto yaw_pitch_last = aim(target, bullet_speed, sentry_world, preferred_armor_id, aim_center);
 
   target.predict(DT);  // [0] = -HALF_HORIZON * DT -> [HHALF_HORIZON] = 0
-  auto yaw_pitch = aim(target, bullet_speed, sentry_world, preferred_armor_id);
+  auto yaw_pitch = aim(target, bullet_speed, sentry_world, preferred_armor_id, aim_center);
 
   for (int i = 0; i < HORIZON; i++) {
     target.predict(DT);
-    auto yaw_pitch_next = aim(target, bullet_speed, sentry_world, preferred_armor_id);
+    auto yaw_pitch_next = aim(target, bullet_speed, sentry_world, preferred_armor_id, aim_center);
 
     auto yaw_vel = tools::limit_rad(yaw_pitch_next(0) - yaw_pitch_last(0)) / (2 * DT);
     auto pitch_vel = (yaw_pitch_next(1) - yaw_pitch_last(1)) / (2 * DT);

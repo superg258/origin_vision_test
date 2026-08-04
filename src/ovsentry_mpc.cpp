@@ -60,10 +60,11 @@ struct TargetSession
 {
   auto_aim::ArmorName name;
   auto_aim::ArmorType armor_type;
+  bool aim_center = false;
 
   bool operator==(const TargetSession & rhs) const
   {
-    return name == rhs.name && armor_type == rhs.armor_type;
+    return name == rhs.name && armor_type == rhs.armor_type && aim_center == rhs.aim_center;
   }
 };
 
@@ -243,22 +244,27 @@ tools::Recorder recorder(30);
 
       // 只在Tracker明确进入tracking时控制；temp_lost/lost不再设置额外保持时限。
       const bool tracker_control_ready = tracker_state == "tracking";
+      shooter.update_high_spin_modes(targets);
+      const bool high_spin_center_aim_active = shooter.high_spin_center_aim_active();
       (void)aimer.aim(targets, timestamp, gimbal.bullet_speed(), true);
 
       auto_aim::Plan mpc_plan{false};
       auto_aim::SentryMpcSetpoint setpoint;
       std::optional<int> control_armor_id;
-      if (!targets.empty() && tracker_state == "tracking" && aimer.debug_aim_point.valid) {
+      if (
+        !high_spin_center_aim_active && !targets.empty() && tracker_state == "tracking" &&
+        aimer.debug_aim_point.valid) {
         control_armor_id = aimer.debug_aim_point.armor_id;
       }
-      const bool aim_point_ready = control_armor_id.has_value();
+      const bool aim_point_ready = high_spin_center_aim_active || control_armor_id.has_value();
 
       if (targets.empty() || !tracker_control_ready || !aim_point_ready) {
         reset_control_session();
       } else {
         const auto & target = targets.front();
         // 正常换打击板不会改变Tracker目标，不应反复重启首次接管。
-        const TargetSession session{target.name, target.armor_type};
+        const TargetSession session{
+          target.name, target.armor_type, high_spin_center_aim_active};
         if (!active_target_session.has_value() || !(active_target_session.value() == session)) {
           takeover.reset();
           active_target_session = session;
@@ -266,7 +272,7 @@ tools::Recorder recorder(30);
 
         const auto sentry_plan = planner.plan_sentry_world(
           std::optional<auto_aim::Target>{target}, gimbal.bullet_speed(),
-          control_armor_id.value());
+          control_armor_id, high_spin_center_aim_active);
         mpc_plan = sentry_plan.world_small_yaw_plan;
         if (safety_gate.plan_is_safe(mpc_plan, gimbal_state.pitch)) {
           setpoint = takeover.update(
@@ -301,9 +307,10 @@ tools::Recorder recorder(30);
       const bool shooter_ready = shooter.shoot(
         command, aimer, targets, motor_ypr, tracker_control_ready);
       const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
+      const bool high_spin_fire_ready = high_spin_force_fire && mpc_plan.control;
+      const bool normal_fire_ready = setpoint.fire_ready && mpc_plan.fire && shooter_ready;
       command.shoot =
-        command.control && tracker_control_ready && setpoint.fire_ready &&
-        (high_spin_force_fire || (mpc_plan.fire && shooter_ready));
+        command.control && tracker_control_ready && (high_spin_fire_ready || normal_fire_ready);
 
       if (command.control && !targets.empty()) fill_target_info(command, targets.front());
 
@@ -370,6 +377,9 @@ tools::Recorder recorder(30);
       data["gimbal_pitch_vel"] = gimbal_state.pitch_vel * 57.3;
       data["mpc_control"] = command.control ? 1 : 0;
       data["mpc_fire"] = command.shoot ? 1 : 0;
+      data["high_spin_force_fire_active"] =
+        shooter.high_spin_force_fire_active() ? 1 : 0;
+      data["high_spin_center_aim_active"] = high_spin_center_aim_active ? 1 : 0;
       data["mpc_target_yaw"] = mpc_plan.target_yaw * 57.3;
       data["mpc_target_pitch"] = mpc_plan.target_pitch * 57.3;
       data["mpc_small_yaw"] = small_yaw * 57.3;

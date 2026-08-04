@@ -112,8 +112,11 @@ second_tolerance: 3 # 远距离射击容差，degree
 judge_distance: 3 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 high_spin_force_fire_enabled: true
-high_spin_force_fire_enter_speed: 11.0 # rad/s
-high_spin_force_fire_exit_speed: 9.0 # rad/s
+high_spin_force_fire_enter_speed: 6.0 # rad/s, keep tracking armor and continuously fire
+high_spin_force_fire_exit_speed: 5.0 # rad/s, hysteresis prevents repeated mode switching
+high_spin_center_aim_enabled: true
+high_spin_center_aim_enter_speed: 10.0 # rad/s, aim at vehicle rotation center and continuously fire
+high_spin_center_aim_exit_speed: 8.0 # rad/s
 outpost_fire_require_locked: true
 # Before the armor faces the shooter, wait for this many degrees; after it passes the center,
 # keep firing through outpost_fire_exit_angle. Negative enter values delay fire until after center.

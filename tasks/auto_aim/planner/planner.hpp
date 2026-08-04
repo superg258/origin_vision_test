@@ -47,10 +47,11 @@ public:
   Plan plan(Target target, double bullet_speed);
   Plan plan(std::optional<Target> target, double bullet_speed);
   SentryPlan plan_sentry_world(
-    Target target, double bullet_speed, std::optional<int> preferred_armor_id = std::nullopt);
+    Target target, double bullet_speed, std::optional<int> preferred_armor_id = std::nullopt,
+    bool aim_center = false);
   SentryPlan plan_sentry_world(
     std::optional<Target> target, double bullet_speed,
-    std::optional<int> preferred_armor_id = std::nullopt);
+    std::optional<int> preferred_armor_id = std::nullopt, bool aim_center = false);
 
 private:
   double yaw_offset_;
@@ -68,15 +69,17 @@ private:
 
   Plan plan_impl(
     Target target, double bullet_speed, bool sentry_world, double * sentry_big_yaw,
-    std::optional<int> preferred_armor_id);
+    std::optional<int> preferred_armor_id, bool aim_center);
   Eigen::Matrix<double, 2, 1> aim(
     const Target & target, double bullet_speed, bool sentry_world,
-    std::optional<int> preferred_armor_id);
+    std::optional<int> preferred_armor_id, bool aim_center);
+  Eigen::Vector4d select_aim_point(
+    const Target & target, std::optional<int> preferred_armor_id, bool aim_center) const;
   Eigen::Vector4d select_armor(
     const Target & target, std::optional<int> preferred_armor_id) const;
   Trajectory get_trajectory(
     Target & target, double yaw0, double bullet_speed, bool sentry_world,
-    std::optional<int> preferred_armor_id);
+    std::optional<int> preferred_armor_id, bool aim_center);
 };
 
 }  // namespace auto_aim

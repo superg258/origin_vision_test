@@ -76,10 +76,11 @@ struct TargetSession
 {
   auto_aim::ArmorName name;
   auto_aim::ArmorType armor_type;
+  bool aim_center = false;
 
   bool operator==(const TargetSession & rhs) const
   {
-    return name == rhs.name && armor_type == rhs.armor_type;
+    return name == rhs.name && armor_type == rhs.armor_type && aim_center == rhs.aim_center;
   }
 };
 
@@ -886,6 +887,7 @@ int main(int argc, char * argv[])
     std::optional<auto_aim::SentryMpcSetpoint> main_mpc_setpoint;
     bool tracker_control_ready = false;
     bool aim_point_ready = false;
+    bool high_spin_center_aim_active = false;
     std::optional<auto_buff::PowerRune> buff_power_runes;
     bool buff_target_solved = false;
     double buff_detect_time_ms = 0.0;
@@ -1185,23 +1187,28 @@ int main(int argc, char * argv[])
       back_img.release();
       clear_omni_redirect_state();
 
-      // Aimer 仅保留选板状态和可视化信息；实际控制角、速度和加速度全部来自 MPC。
+      // Aimer keeps armor-selection debug state; MPC provides all commanded motion.
       tracker_control_ready = tracker_state == "tracking";
+      shooter.update_high_spin_modes(targets);
+      high_spin_center_aim_active = shooter.high_spin_center_aim_active();
       (void)aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
 
       auto_aim::Plan mpc_plan{false};
       auto_aim::SentryMpcSetpoint setpoint;
       std::optional<int> control_armor_id;
-      if (!targets.empty() && tracker_control_ready && aimer.debug_aim_point.valid) {
+      if (
+        !high_spin_center_aim_active && !targets.empty() && tracker_control_ready &&
+        aimer.debug_aim_point.valid) {
         control_armor_id = aimer.debug_aim_point.armor_id;
       }
-      aim_point_ready = control_armor_id.has_value();
+      aim_point_ready = high_spin_center_aim_active || control_armor_id.has_value();
 
       if (targets.empty() || !tracker_control_ready || !aim_point_ready) {
         reset_control_session();
       } else {
         const auto & target = targets.front();
-        const TargetSession session{target.name, target.armor_type};
+        const TargetSession session{
+          target.name, target.armor_type, high_spin_center_aim_active};
         if (!active_target_session.has_value() || !(active_target_session.value() == session)) {
           takeover.reset();
           active_target_session = session;
@@ -1209,7 +1216,7 @@ int main(int argc, char * argv[])
 
         const auto sentry_plan = planner.plan_sentry_world(
           std::optional<auto_aim::Target>{target}, gimbal->bullet_speed(),
-          control_armor_id.value());
+          control_armor_id, high_spin_center_aim_active);
         mpc_plan = sentry_plan.world_small_yaw_plan;
         main_mpc_plan = mpc_plan;
         if (safety_gate.plan_is_safe(mpc_plan, gimbal_state.pitch)) {
@@ -1253,8 +1260,10 @@ int main(int argc, char * argv[])
       const bool shooter_ready =
         shooter.shoot(command, aimer, targets, motor_ypr, tracker_control_ready);
       const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
-      command.shoot = command.control && tracker_control_ready && setpoint.fire_ready &&
-                      (high_spin_force_fire || (mpc_plan.fire && shooter_ready));
+      const bool high_spin_fire_ready = high_spin_force_fire && mpc_plan.control;
+      const bool normal_fire_ready = setpoint.fire_ready && mpc_plan.fire && shooter_ready;
+      command.shoot =
+        command.control && tracker_control_ready && (high_spin_fire_ready || normal_fire_ready);
 
       if (command.control && !targets.empty()) fill_target_info(command, targets.front());
 
@@ -1280,6 +1289,10 @@ int main(int argc, char * argv[])
     data["high_spin_force_fire_enabled"] = shooter.high_spin_force_fire_enabled() ? 1 : 0;
     data["high_spin_force_fire_enter_speed"] = shooter.high_spin_force_fire_enter_speed();
     data["high_spin_force_fire_exit_speed"] = shooter.high_spin_force_fire_exit_speed();
+    data["high_spin_center_aim_active"] = high_spin_center_aim_active ? 1 : 0;
+    data["high_spin_center_aim_enabled"] = shooter.high_spin_center_aim_enabled() ? 1 : 0;
+    data["high_spin_center_aim_enter_speed"] = shooter.high_spin_center_aim_enter_speed();
+    data["high_spin_center_aim_exit_speed"] = shooter.high_spin_center_aim_exit_speed();
     data["mpc_setpoint_fire_ready"] =
       main_mpc_setpoint.has_value() && main_mpc_setpoint->fire_ready ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;

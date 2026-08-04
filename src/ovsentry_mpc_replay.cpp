@@ -199,14 +199,22 @@ int main(int argc, char * argv[])
     const std::string tracker_state = tracker.state();
 
     // This is the same main-camera planning path as ovsentry_mpc, without live joint feedback.
+    shooter.update_high_spin_modes(targets);
+    const bool high_spin_center_aim_active = shooter.high_spin_center_aim_active();
     (void)aimer.aim(targets, timestamp, bullet_speed, true);
     auto_aim::Plan mpc_plan{false};
     double big_yaw = 0.0;
     const bool tracker_ready = tracker_state == "tracking";
-    if (!targets.empty() && tracker_ready && aimer.debug_aim_point.valid) {
+    if (
+      !targets.empty() && tracker_ready &&
+      (high_spin_center_aim_active || aimer.debug_aim_point.valid)) {
+      std::optional<int> preferred_armor_id;
+      if (!high_spin_center_aim_active) {
+        preferred_armor_id = aimer.debug_aim_point.armor_id;
+      }
       const auto sentry_plan = planner.plan_sentry_world(
         std::optional<auto_aim::Target>{targets.front()}, bullet_speed,
-        aimer.debug_aim_point.armor_id);
+        preferred_armor_id, high_spin_center_aim_active);
       mpc_plan = sentry_plan.world_small_yaw_plan;
       big_yaw = sentry_plan.big_yaw;
     }
@@ -274,6 +282,10 @@ int main(int argc, char * argv[])
     data["high_spin_force_fire_enabled"] = shooter.high_spin_force_fire_enabled() ? 1 : 0;
     data["high_spin_force_fire_enter_speed"] = shooter.high_spin_force_fire_enter_speed();
     data["high_spin_force_fire_exit_speed"] = shooter.high_spin_force_fire_exit_speed();
+    data["high_spin_center_aim_active"] = high_spin_center_aim_active ? 1 : 0;
+    data["high_spin_center_aim_enabled"] = shooter.high_spin_center_aim_enabled() ? 1 : 0;
+    data["high_spin_center_aim_enter_speed"] = shooter.high_spin_center_aim_enter_speed();
+    data["high_spin_center_aim_exit_speed"] = shooter.high_spin_center_aim_exit_speed();
     data["mpc_small_yaw"] = mpc_plan.yaw * 57.3;
     data["mpc_big_yaw"] = big_yaw * 57.3;
     data["mpc_pitch"] = mpc_plan.pitch * 57.3;
