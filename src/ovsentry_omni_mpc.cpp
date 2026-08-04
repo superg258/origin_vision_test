@@ -1252,8 +1252,9 @@ int main(int argc, char * argv[])
       const Eigen::Vector3d motor_ypr{command_gimbal_state.yaw, command_gimbal_state.pitch, 0.0};
       const bool shooter_ready =
         shooter.shoot(command, aimer, targets, motor_ypr, tracker_control_ready);
+      const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
       command.shoot = command.control && tracker_control_ready && setpoint.fire_ready &&
-                      mpc_plan.fire && shooter_ready;
+                      (mpc_plan.fire || high_spin_force_fire) && shooter_ready;
 
       if (command.control && !targets.empty()) fill_target_info(command, targets.front());
 
@@ -1274,6 +1275,8 @@ int main(int argc, char * argv[])
     data["main_tracker_hold"] = main_tracker_hold_applied ? 1 : 0;
     data["main_lost_cmd_hold"] = main_lost_cmd_hold_applied ? 1 : 0;
     data["main_lost_cmd_hold_remaining_ms"] = main_lost_cmd_hold_remaining_ms;
+    data["high_spin_force_fire_active"] =
+      (!buff_mode && !omni_mode && shooter.high_spin_force_fire_active()) ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_small_yaw"] = gimbal_state.yaw * 57.3;
     data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
@@ -1334,6 +1337,8 @@ int main(int argc, char * argv[])
     if (!targets.empty()) {
       const auto & target = targets.front();
       data["target_name"] = auto_aim::ARMOR_NAMES[target.name];
+      data["target_angular_speed"] = std::abs(target.ekf_x()[7]);
+      data["target_angular_speed_deg_s"] = std::abs(target.ekf_x()[7]) * 57.3;
       const auto & ekf_data = target.ekf().data;
       for (const auto * key : {
              "residual_yaw", "residual_pitch", "residual_distance", "residual_angle", "nis",

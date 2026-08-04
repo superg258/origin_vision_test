@@ -300,9 +300,10 @@ tools::Recorder recorder(30);
         command_gimbal_state.yaw, command_gimbal_state.pitch, 0.0};
       const bool shooter_ready = shooter.shoot(
         command, aimer, targets, motor_ypr, tracker_control_ready);
+      const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
       command.shoot =
-        command.control && tracker_control_ready && setpoint.fire_ready && mpc_plan.fire &&
-        shooter_ready;
+        command.control && tracker_control_ready && setpoint.fire_ready &&
+        (mpc_plan.fire || high_spin_force_fire) && shooter_ready;
 
       if (command.control && !targets.empty()) fill_target_info(command, targets.front());
 

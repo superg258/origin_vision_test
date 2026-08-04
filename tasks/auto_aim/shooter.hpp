@@ -18,6 +18,8 @@ public:
     const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos,
     bool tracker_tracking);
 
+  bool high_spin_force_fire_active() const { return high_spin_force_fire_active_; }
+
 private:
   io::Command last_command_;
   double judge_distance_;

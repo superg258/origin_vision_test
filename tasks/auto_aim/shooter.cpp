@@ -83,7 +83,9 @@ bool Shooter::shoot(
     }
   }
 
-  if (!high_spin_force_fire_enabled_ || !aim_locked) {
+  // Outpost fire is governed solely by its lock, phase, alignment, and MPC gates.
+  // High-spin force fire applies only to regular armor targets.
+  if (target.name == ArmorName::outpost || !high_spin_force_fire_enabled_ || !aim_locked) {
     high_spin_force_fire_active_ = false;
   } else if (high_spin_force_fire_active_) {
     if (angular_speed < high_spin_force_fire_exit_speed_) high_spin_force_fire_active_ = false;
