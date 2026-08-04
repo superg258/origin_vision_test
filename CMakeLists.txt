@@ -50,6 +50,7 @@ add_executable(uav src/uav.cpp)
 add_executable(uav_debug src/uav_debug.cpp)
 add_executable(ovgimbal_auto_aim_test src/ovgimbal_auto_aim_test.cpp)
 add_executable(ovgimbal_mpc src/ovgimbal_mpc.cpp)
+add_executable(ovsentry_mpc_replay src/ovsentry_mpc_replay.cpp)
 
 target_link_libraries(standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
@@ -62,6 +63,7 @@ target_link_libraries(uav ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff to
 target_link_libraries(uav_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 target_link_libraries(ovgimbal_auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 target_link_libraries(ovgimbal_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+target_link_libraries(ovsentry_mpc_replay ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
 ##################calibration################
 add_executable(capture calibration/capture.cpp)
