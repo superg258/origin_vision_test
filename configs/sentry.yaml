@@ -1,5 +1,5 @@
-enemy_color: "red"
-# enemy_color: "blue"
+# enemy_color: "red"
+enemy_color: "blue"
 
 
 #####-----神经网络参数-----#####
@@ -8,10 +8,10 @@ classify_model: assets/tiny_resnet.onnx
 yolo11_model_path: assets/yolo11.xml
 yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/yolov5_0526.xml
-device: CPU
-auto_aim_device: CPU
-omni_device: CPU
-classifier_device: CPU
+device: GPU
+auto_aim_device: GPU
+omni_device: GPU
+classifier_device: GPU
 min_confidence: 0.8
 use_traditional: true
 
@@ -48,8 +48,8 @@ omni_fov_v_deg: 67.0
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
-exposure_ms: 4
-gain: 10
+exposure_ms: 5
+gain: 15
 vid_pid: "2bdf:0001"
 
 #####-----传统方法参数-----#####
@@ -72,7 +72,7 @@ can_interface: "can0"
 
 #####-----时序参数-----#####
 timing:
-  offset: 0.002 # s, 图像时间戳到姿态查询的固定补偿
+  offset: 0.001 # s, 图像时间戳到姿态查询的固定补偿
 
 #####-----ROS2云台桥参数-----#####
 ros2_gimbal:
@@ -95,19 +95,20 @@ gimbal_axis_order: pitch_yaw # yaw_pitch: yaw轴在外；pitch_yaw: pitch轴在�
 
 #####-----aimer参数-----#####
 yaw_offset: 2.5 # degree -2.5
-pitch_offset: -2.5  # degree 2
+pitch_offset: -0.5  # degree 2
+
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 resistance_k: 0.023 # 空气阻力系数
-decision_speed: 10 # rad/s
+decision_speed: 8 # rad/s
 high_speed_delay_time: 0.073 # s
-low_speed_delay_time: 0.058 # s
+low_speed_delay_time: 0.077 # s
 # Extra prediction time for the outpost only. Negative values reduce its aim lead.
-outpost_prediction_offset_s: -0.040
+outpost_prediction_offset_s: -0.055
 
 #####-----shooter参数-----#####
-first_tolerance: 5 # 近距离射击容差，degree
-second_tolerance: 5 # 远距离射击容差，degree
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 3 # 远距离射击容差，degree
 judge_distance: 3 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 high_spin_force_fire_enabled: true
@@ -117,8 +118,8 @@ outpost_fire_require_locked: true
 # Before the armor faces the shooter, wait for this many degrees; after it passes the center,
 # keep firing through outpost_fire_exit_angle. Negative enter values delay fire until after center.
 # The directions follow the tracked rotation sign.
-outpost_fire_enter_angle: -5.0 # degree, starts firing 5 degrees after facing the shooter
-outpost_fire_exit_angle: 30.0 # degree, larger means longer firing while leaving
+outpost_fire_enter_angle: 10.0 # degree, starts firing 5 degrees after facing the shooter
+outpost_fire_exit_angle: 40.0 # degree, larger means longer firing while leaving
 
 #####-----decider参数-----#####
 mode: 1
@@ -136,7 +137,7 @@ R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 # R_camera2gimbal均按OpenCV原始x向右、y向下、z向前坐标定义。
 # 相机同理想情况的偏角: yaw-15.40 pitch5.06 roll80.99 degree
 R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
-t_camera2gimbal: [0.081834836810026332, 0.0038077150929364738, 0.087564665738670097]
+t_camera2gimbal: [0.131971834836810026332, 0.0038077150929364738, -0.040807564665738670097]
 
 
 # 重投影误差: 0.1281px

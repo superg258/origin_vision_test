@@ -469,8 +469,8 @@ void draw_auto_aim_overlay(
 {
   // Timing calibration needs only one same-frame pair. Showing all of a robot's armor plates,
   // the ballistic aim point, and PnP round trips makes a correct multi-plate model look wrong.
-  constexpr cv::Scalar kDetectionColor{255, 255, 0};  // cyan
-  constexpr cv::Scalar kPredictionColor{0, 255, 255}; // yellow
+  const cv::Scalar kDetectionColor{255, 255, 0};  // cyan
+  const cv::Scalar kPredictionColor{0, 255, 255}; // yellow
 
   tools::draw_text(
     img, fmt::format("timing offset={:+.2f}ms", timing_offset_ms), {10, 90},

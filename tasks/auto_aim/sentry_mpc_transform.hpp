@@ -1,4 +1,4 @@
-++++++++++++++++++++++++++++++++#ifndef AUTO_AIM__SENTRY_MPC_TRANSFORM_HPP
+#ifndef AUTO_AIM__SENTRY_MPC_TRANSFORM_HPP
 #define AUTO_AIM__SENTRY_MPC_TRANSFORM_HPP
 
 #include <Eigen/Geometry>

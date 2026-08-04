@@ -16,8 +16,8 @@ namespace
 constexpr double OUTPOST_RULE_SPEED = 0.8 * CV_PI;
 constexpr double NORMAL_TRANSLATION_PROCESS_NOISE = 100.0;
 constexpr double NORMAL_YAW_PROCESS_NOISE = 400.0;
-constexpr double OUTPOST_XY_PROCESS_NOISE = 640.0;
-constexpr double OUTPOST_Z_PROCESS_NOISE = 40.0;
+constexpr double OUTPOST_XY_PROCESS_NOISE = 100.0;
+constexpr double OUTPOST_Z_PROCESS_NOISE = 10.0;
 constexpr double OUTPOST_YAW_PROCESS_NOISE = 4.0;
 constexpr double OUTPOST_INIT_Z_RESIDUAL_GATE = 0.035;
 constexpr double OUTPOST_INIT_Z_MAX_RESIDUAL = 0.075;
