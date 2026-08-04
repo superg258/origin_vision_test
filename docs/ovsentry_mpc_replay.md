@@ -25,7 +25,9 @@ Build the target as usual, then run it from the repository root:
 ```
 
 The input can be either the shared basename or the `.avi` path. The matching
-`.txt` file is found automatically. Press `q` to stop playback. Useful options:
+`.txt` file is found automatically. The config can be passed with
+`--config-path` or as the second positional argument. Press `q` to stop playback.
+Useful options:
 
 ```bash
 # Process a selected interval with a chosen bullet speed.

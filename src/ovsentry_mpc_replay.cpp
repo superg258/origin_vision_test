@@ -32,7 +32,8 @@ const std::string keys =
   "{end-index e    | 0                      | Last frame index to replay (0 means EOF) }"
   "{bullet-speed b | 22.0                   | Simulated bullet speed in m/s }"
   "{no-display     |                        | Process without an OpenCV window }"
-  "{@input-path    |                        | Recording stem or .avi path }";
+  "{@input-path    |                        | Recording stem or .avi path }"
+  "{@config-positional |                    | Optional positional YAML path }";
 
 struct RecordingPaths
 {
@@ -102,7 +103,10 @@ int main(int argc, char * argv[])
   }
 
   const auto input_path = cli.get<std::string>("@input-path");
-  const auto config_path = cli.get<std::string>("config-path");
+  const auto positional_config_path = cli.get<std::string>("@config-positional");
+  const auto config_path = positional_config_path.empty()
+                             ? cli.get<std::string>("config-path")
+                             : positional_config_path;
   const int start_index = std::max(0, cli.get<int>("start-index"));
   const int end_index = cli.get<int>("end-index");
   const double bullet_speed = cli.get<double>("bullet-speed");
