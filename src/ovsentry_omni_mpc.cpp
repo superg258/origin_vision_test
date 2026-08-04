@@ -1254,7 +1254,7 @@ int main(int argc, char * argv[])
         shooter.shoot(command, aimer, targets, motor_ypr, tracker_control_ready);
       const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
       command.shoot = command.control && tracker_control_ready && setpoint.fire_ready &&
-                      (mpc_plan.fire || high_spin_force_fire) && shooter_ready;
+                      (high_spin_force_fire || (mpc_plan.fire && shooter_ready));
 
       if (command.control && !targets.empty()) fill_target_info(command, targets.front());
 
