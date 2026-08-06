@@ -1,3 +1,4 @@
+#include <memory>
 #include <string>
 
 #include "io/camera.hpp"
@@ -13,7 +14,8 @@
 
 const std::string keys =
   "{help h usage ? | | Display command line options }"
-  "{@config-path   | configs/sentry.yaml | YAML configuration file path }";
+  "{@config-path   | configs/sentry.yaml | YAML configuration file path }"
+  "{no-cboard      | | Run without SocketCAN or command transmission }";
 
 int main(int argc, char * argv[])
 {
@@ -23,10 +25,12 @@ int main(int argc, char * argv[])
     return 0;
   }
   const auto config_path = cli.get<std::string>(0);
+  const bool use_cboard = !cli.has("no-cboard");
 
   tools::Plotter plotter;
   tools::Exiter exiter;
-  io::CBoard cboard(config_path);
+  std::unique_ptr<io::CBoard> cboard;
+  if (use_cboard) cboard = std::make_unique<io::CBoard>(config_path);
   io::Camera camera(config_path);
 
   // This executable intentionally starts in big-buff mode with the dedicated model.
@@ -41,7 +45,8 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(image, timestamp);
-    orientation = cboard.imu_at_image(timestamp);
+    orientation =
+      use_cboard ? cboard->imu_at_image(timestamp) : Eigen::Quaterniond::Identity();
     solver.set_R_gimbal2world(orientation);
 
     auto power_rune = detector.detect_24(image);
@@ -49,13 +54,15 @@ int main(int argc, char * argv[])
     target.get_target(power_rune, timestamp);
 
     auto target_copy = target;
-    const auto command = aimer.aim(target_copy, timestamp, cboard.bullet_speed, true);
-    cboard.send(command);
+    const double bullet_speed = use_cboard ? cboard->bullet_speed : 24.0;
+    const auto command = aimer.aim(target_copy, timestamp, bullet_speed, true);
+    if (use_cboard) cboard->send(command);
 
     nlohmann::json data;
     data["mode"] = "big_buff";
+    data["cboard"] = use_cboard ? 1 : 0;
     if (power_rune.has_value()) {
-      const auto & rune = power_rune.value();
+      auto & rune = power_rune.value();
       data["buff_R_yaw"] = rune.ypd_in_world[0];
       data["buff_R_pitch"] = rune.ypd_in_world[1];
       data["buff_R_dis"] = rune.ypd_in_world[2];
