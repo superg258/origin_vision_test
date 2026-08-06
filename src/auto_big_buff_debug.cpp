@@ -1,8 +1,8 @@
-#include <memory>
 #include <string>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/gimbal/gimbal.hpp"
+#include "io/ros2/ros2_gimbal.hpp"
 #include "tasks/auto_buff/buff_aimer.hpp"
 #include "tasks/auto_buff/buff_detector.hpp"
 #include "tasks/auto_buff/buff_solver.hpp"
@@ -12,10 +12,26 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 
+namespace
+{
+io::GimbalState make_buff_gimbal_state(const io::ROS2GimbalState & state)
+{
+  return {
+    static_cast<float>(state.yaw), static_cast<float>(state.yaw_vel),
+    static_cast<float>(state.pitch), static_cast<float>(state.pitch_vel),
+    static_cast<float>(state.bullet_speed), 0};
+}
+
+double nearest_continuous_yaw(double wrapped_yaw, double reference_yaw)
+{
+  return reference_yaw + tools::limit_rad(wrapped_yaw - reference_yaw);
+}
+}  // namespace
+
 const std::string keys =
   "{help h usage ? | | Display command line options }"
   "{@config-path   | configs/sentry.yaml | YAML configuration file path }"
-  "{no-cboard      | | Run without SocketCAN or command transmission }";
+  "{fire           | | Forward firing commands to the ROS2 gimbal }";
 
 int main(int argc, char * argv[])
 {
@@ -25,12 +41,11 @@ int main(int argc, char * argv[])
     return 0;
   }
   const auto config_path = cli.get<std::string>(0);
-  const bool use_cboard = !cli.has("no-cboard");
+  const bool allow_fire = cli.has("fire");
 
   tools::Plotter plotter;
   tools::Exiter exiter;
-  std::unique_ptr<io::CBoard> cboard;
-  if (use_cboard) cboard = std::make_unique<io::CBoard>(config_path);
+  io::ROS2Gimbal gimbal(config_path);
   io::Camera camera(config_path);
 
   // This executable intentionally starts in big-buff mode with the dedicated model.
@@ -45,8 +60,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(image, timestamp);
-    orientation =
-      use_cboard ? cboard->imu_at_image(timestamp) : Eigen::Quaterniond::Identity();
+    orientation = gimbal.imu_at_image(timestamp);
     solver.set_R_gimbal2world(orientation);
 
     auto power_rune = detector.detect_24(image);
@@ -54,13 +68,19 @@ int main(int argc, char * argv[])
     target.get_target(power_rune, timestamp);
 
     auto target_copy = target;
-    const double bullet_speed = use_cboard ? cboard->bullet_speed : 24.0;
-    const auto command = aimer.aim(target_copy, timestamp, bullet_speed, true);
-    if (use_cboard) cboard->send(command);
+    const auto gimbal_state = gimbal.state();
+    const auto plan = aimer.mpc_aim(
+      target_copy, timestamp, make_buff_gimbal_state(gimbal_state), true);
+    const double small_yaw = tools::limit_rad(plan.yaw);
+    const double big_yaw = nearest_continuous_yaw(small_yaw, gimbal_state.big_yaw);
+    gimbal.send_mpc(
+      plan.control, allow_fire && plan.fire, big_yaw, small_yaw, plan.pitch, plan.yaw_vel,
+      plan.pitch_vel, plan.yaw_acc, plan.pitch_acc);
 
     nlohmann::json data;
     data["mode"] = "big_buff";
-    data["cboard"] = use_cboard ? 1 : 0;
+    data["ros2_gimbal"] = 1;
+    data["fire_enabled"] = allow_fire ? 1 : 0;
     if (power_rune.has_value()) {
       auto & rune = power_rune.value();
       data["buff_R_yaw"] = rune.ypd_in_world[0];
@@ -102,10 +122,14 @@ int main(int argc, char * argv[])
     const auto gimbal_ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
     data["gimbal_yaw"] = gimbal_ypr[0] * 57.3;
     data["gimbal_pitch"] = gimbal_ypr[1] * 57.3;
-    if (command.control) {
-      data["cmd_yaw"] = command.yaw * 57.3;
-      data["cmd_pitch"] = command.pitch * 57.3;
-      data["shoot"] = command.shoot ? 1 : 0;
+    if (plan.control) {
+      data["cmd_yaw"] = plan.yaw * 57.3;
+      data["cmd_pitch"] = plan.pitch * 57.3;
+      data["cmd_yaw_vel"] = plan.yaw_vel * 57.3;
+      data["cmd_pitch_vel"] = plan.pitch_vel * 57.3;
+      data["cmd_yaw_acc"] = plan.yaw_acc * 57.3;
+      data["cmd_pitch_acc"] = plan.pitch_acc * 57.3;
+      data["shoot"] = allow_fire && plan.fire ? 1 : 0;
     }
     plotter.plot(data);
 
@@ -114,5 +138,6 @@ int main(int argc, char * argv[])
     if (cv::waitKey(1) == 'q') break;
   }
 
+  gimbal.send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
   return 0;
 }
