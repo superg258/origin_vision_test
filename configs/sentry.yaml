@@ -157,6 +157,9 @@ R_pitch: [1]
 ConfidenceThreshold: 0.5
 IouThreshold: 0.2
 model: "assets/buff_repvgg.xml"
+big_buff_model: "assets/yolo11-buff-nano-v5.xml"
+big_buff_confidence_threshold: 0.30
+big_buff_iou_threshold: 0.80
 
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.3 # s

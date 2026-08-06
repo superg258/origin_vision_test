@@ -37,7 +37,10 @@ void assign_slot(PowerRune & powerrune)
 }
 }  // namespace
 
-Buff_Detector::Buff_Detector(const std::string & config) : status_(LOSE), lose_(0), MODE_(config)
+Buff_Detector::Buff_Detector(const std::string & config) : Buff_Detector(config, "model") {}
+
+Buff_Detector::Buff_Detector(const std::string & config, const std::string & model_key)
+  : status_(LOSE), lose_(0), MODE_(config, model_key)
 {
   auto yaml = YAML::LoadFile(config);
   if (yaml["binary_threshold"]) binary_threshold_ = yaml["binary_threshold"].as<int>();

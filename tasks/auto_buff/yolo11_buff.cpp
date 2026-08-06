@@ -1,18 +1,33 @@
 #include "yolo11_buff.hpp"
 
+#include <algorithm>
 #include <iostream>
+#include <stdexcept>
 
 namespace auto_buff
 {
-YOLO11_BUFF::YOLO11_BUFF(const std::string & config)
+YOLO11_BUFF::YOLO11_BUFF(const std::string & config) : YOLO11_BUFF(config, "model") {}
+
+YOLO11_BUFF::YOLO11_BUFF(const std::string & config, const std::string & model_key)
 {
   auto yaml = YAML::LoadFile(config);
-  std::string model_path = yaml["model"].as<std::string>();
+  if (!yaml[model_key]) {
+    throw std::runtime_error("[YOLO11_BUFF] missing model key: " + model_key);
+  }
+  std::string model_path = yaml[model_key].as<std::string>();
   if (yaml["ConfidenceThreshold"]) {
     ConfidenceThreshold = yaml["ConfidenceThreshold"].as<double>();
   }
   if (yaml["IouThreshold"]) {
     IouThreshold = yaml["IouThreshold"].as<double>();
+  }
+  if (model_key == "big_buff_model") {
+    if (yaml["big_buff_confidence_threshold"]) {
+      ConfidenceThreshold = yaml["big_buff_confidence_threshold"].as<double>();
+    }
+    if (yaml["big_buff_iou_threshold"]) {
+      IouThreshold = yaml["big_buff_iou_threshold"].as<double>();
+    }
   }
   if (yaml["enemy_color"]) {
     set_enemy_color(yaml["enemy_color"].as<std::string>());
@@ -22,6 +37,67 @@ YOLO11_BUFF::YOLO11_BUFF(const std::string & config)
   infer_request = compiled_model.create_infer_request();
   input_tensor = infer_request.get_input_tensor();
   input_tensor.set_shape({1, 3, 640, 640});
+}
+
+std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::decode_single_class_pose(
+  const ov::Tensor & output, float factor, bool apply_nms) const
+{
+  const auto & output_shape = output.get_shape();
+  if (output_shape.size() != 3 || output_shape[0] != 1 || output_shape[1] != 23) {
+    return {};
+  }
+
+  constexpr int kKeypointCount = 6;
+  constexpr int kKeypointStride = 3;
+  constexpr int kScoreChannel = 4;
+  constexpr int kKeypointStart = 5;
+
+  const int candidate_count = static_cast<int>(output_shape[2]);
+  const float * output_buffer = output.data<const float>();
+  std::vector<Object> candidates;
+  candidates.reserve(candidate_count);
+
+  for (int candidate = 0; candidate < candidate_count; ++candidate) {
+    const float score = output_buffer[kScoreChannel * candidate_count + candidate];
+    if (score <= ConfidenceThreshold) continue;
+
+    Object object;
+    const float cx = output_buffer[candidate];
+    const float cy = output_buffer[candidate_count + candidate];
+    const float width = output_buffer[2 * candidate_count + candidate];
+    const float height = output_buffer[3 * candidate_count + candidate];
+    object.rect = cv::Rect_<float>(
+      (cx - 0.5F * width) * factor, (cy - 0.5F * height) * factor, width * factor,
+      height * factor);
+    object.label = 0;
+    object.prob = score;
+    object.kpt.reserve(kKeypointCount);
+    for (int keypoint = 0; keypoint < kKeypointCount; ++keypoint) {
+      const int channel = kKeypointStart + keypoint * kKeypointStride;
+      const float x = output_buffer[channel * candidate_count + candidate] * factor;
+      const float y = output_buffer[(channel + 1) * candidate_count + candidate] * factor;
+      object.kpt.emplace_back(x, y);
+    }
+    candidates.emplace_back(std::move(object));
+  }
+
+  if (!apply_nms) return candidates;
+
+  std::vector<cv::Rect> boxes;
+  std::vector<float> confidences;
+  boxes.reserve(candidates.size());
+  confidences.reserve(candidates.size());
+  for (const auto & candidate : candidates) {
+    boxes.emplace_back(candidate.rect);
+    confidences.emplace_back(candidate.prob);
+  }
+
+  std::vector<int> indexes;
+  cv::dnn::NMSBoxes(boxes, confidences, ConfidenceThreshold, IouThreshold, indexes);
+  std::vector<Object> result;
+  result.reserve(indexes.size());
+  for (const int index : indexes) result.emplace_back(candidates[index]);
+  return result;
 }
 
 void YOLO11_BUFF::set_enemy_color(const std::string & color)
@@ -71,6 +147,18 @@ std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_multicandidateboxes(cv::Mat & 
 
   const ov::Tensor output = infer_request.get_output_tensor();
   const ov::Shape output_shape = output.get_shape();
+  if (output_shape.size() == 3 && output_shape[0] == 1 && output_shape[1] == 23) {
+    auto object_result = decode_single_class_pose(output, factor, true);
+    for (const auto & obj : object_result) {
+      cv::rectangle(image, obj.rect, cv::Scalar(255, 255, 255), 1, 8);
+      for (const auto & point : obj.kpt) cv::circle(image, point, 2, cv::Scalar(255, 0, 0), -1);
+    }
+    const float t = (cv::getTickCount() - start) / static_cast<float>(cv::getTickFrequency());
+    cv::putText(
+      image, cv::format("FPS: %.2f", 1.0 / t), cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN,
+      2.0, cv::Scalar(255, 0, 0), 2, 8);
+    return object_result;
+  }
   const float * output_buffer = output.data<const float>();
   const int out_rows = output_shape[1];   // 33
   const int out_cols = output_shape[2];   // 8400
@@ -168,6 +256,21 @@ std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_onecandidatebox(cv::Mat & imag
   // 33 = 4 bbox + 2 class + 9*3 kpt
   const ov::Tensor output = infer_request.get_output_tensor();
   const ov::Shape output_shape = output.get_shape();
+  if (output_shape.size() == 3 && output_shape[0] == 1 && output_shape[1] == 23) {
+    const auto candidates = decode_single_class_pose(output, factor, false);
+    const auto best = std::max_element(
+      candidates.begin(), candidates.end(),
+      [](const Object & lhs, const Object & rhs) { return lhs.prob < rhs.prob; });
+    if (best == candidates.end()) return {};
+
+    cv::rectangle(image, best->rect, cv::Scalar(255, 255, 255), 1, 8);
+    for (const auto & point : best->kpt) cv::circle(image, point, 2, cv::Scalar(255, 255, 0), -1);
+    const float t = (cv::getTickCount() - start) / static_cast<float>(cv::getTickFrequency());
+    cv::putText(
+      image, cv::format("FPS: %.2f", 1.0 / t), cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN,
+      2.0, cv::Scalar(255, 0, 0), 2, 8);
+    return {*best};
+  }
   const float * output_buffer = output.data<const float>();
   const int out_rows = output_shape[1];
   const int out_cols = output_shape[2];

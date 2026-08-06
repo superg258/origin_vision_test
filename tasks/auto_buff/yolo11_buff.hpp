@@ -26,6 +26,7 @@ public:
   };
 
   YOLO11_BUFF(const std::string & config);
+  YOLO11_BUFF(const std::string & config, const std::string & model_key);
 
   // 使用NMS，用来获取多个框
   std::vector<Object> get_multicandidateboxes(cv::Mat & image);
@@ -67,6 +68,9 @@ private:
   void printInputAndOutputsInfo(const ov::Model & network);
 
   void save(const std::string & programName, const cv::Mat & image);
+
+  std::vector<Object> decode_single_class_pose(
+    const ov::Tensor & output, float factor, bool apply_nms) const;
 };
 }  // namespace auto_buff
 #endif
