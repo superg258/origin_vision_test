@@ -36,6 +36,11 @@ Shooter::Shooter(const std::string & config_path)
   high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
   outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
   outpost_phase_fire_enabled_ = yaml["outpost_phase_fire_enabled"].as<bool>(true);
+  outpost_static_fire_enabled_ = yaml["outpost_static_fire_enabled"].as<bool>(true);
+  outpost_static_fire_require_locked_ =
+    yaml["outpost_static_fire_require_locked"].as<bool>(false);
+  outpost_static_speed_threshold_ =
+    std::max(0.0, yaml["outpost_static_speed_threshold"].as<double>(0.15));
   outpost_fire_coming_angle_ =
     yaml["outpost_fire_coming_angle"].as<double>(3.0) / 57.3;
   outpost_fire_leaving_angle_ =
@@ -61,25 +66,33 @@ bool Shooter::shoot(
 
   if (target.name == ArmorName::outpost) {
     const bool locked = target.outpost_layer_locked();
-    if ((outpost_fire_require_locked_ && !locked) || !aim_locked) {
+    const bool static_mode =
+      outpost_static_fire_enabled_ && angular_speed <= outpost_static_speed_threshold_;
+    const bool require_locked =
+      static_mode ? outpost_static_fire_require_locked_ : outpost_fire_require_locked_;
+    if ((require_locked && !locked) || !aim_locked) {
       high_spin_force_fire_active_ = false;
       last_command_ = command;
       return false;
     }
 
-    const double moving_phase = outpost_moving_phase(target, aimer);
-    if (
-      moving_phase < -outpost_fire_coming_angle_ ||
-      moving_phase > outpost_fire_leaving_angle_) {
+    if (static_mode) {
       high_spin_force_fire_active_ = false;
-      last_command_ = command;
-      return false;
-    }
+    } else {
+      const double moving_phase = outpost_moving_phase(target, aimer);
+      if (
+        moving_phase < -outpost_fire_coming_angle_ ||
+        moving_phase > outpost_fire_leaving_angle_) {
+        high_spin_force_fire_active_ = false;
+        last_command_ = command;
+        return false;
+      }
 
-    if (outpost_phase_fire_enabled_) {
-      high_spin_force_fire_active_ = false;
-      last_command_ = command;
-      return true;
+      if (outpost_phase_fire_enabled_) {
+        high_spin_force_fire_active_ = false;
+        last_command_ = command;
+        return true;
+      }
     }
   }
 

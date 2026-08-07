@@ -32,6 +32,9 @@ private:
   bool high_spin_force_fire_active_;
   bool outpost_fire_require_locked_;
   bool outpost_phase_fire_enabled_;
+  bool outpost_static_fire_enabled_;
+  bool outpost_static_fire_require_locked_;
+  double outpost_static_speed_threshold_;
 };
 }  // namespace auto_aim
 
