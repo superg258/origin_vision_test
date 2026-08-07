@@ -35,6 +35,7 @@ Shooter::Shooter(const std::string & config_path)
   high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(12.0);
   high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(9.0);
   outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
+  outpost_phase_fire_enabled_ = yaml["outpost_phase_fire_enabled"].as<bool>(true);
   outpost_fire_coming_angle_ =
     yaml["outpost_fire_coming_angle"].as<double>(3.0) / 57.3;
   outpost_fire_leaving_angle_ =
@@ -73,6 +74,12 @@ bool Shooter::shoot(
       high_spin_force_fire_active_ = false;
       last_command_ = command;
       return false;
+    }
+
+    if (outpost_phase_fire_enabled_) {
+      high_spin_force_fire_active_ = false;
+      last_command_ = command;
+      return true;
     }
   }
 

@@ -112,8 +112,10 @@ high_spin_force_fire_enabled: true
 high_spin_force_fire_enter_speed: 11.0 # rad/s
 high_spin_force_fire_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
+outpost_phase_fire_enabled: true # 是否启用前哨站按相位窗口控制开火
 outpost_fire_coming_angle: 30.0 # degree, coming-side fire window before center
 outpost_fire_leaving_angle: 45.0 # degree, leaving-side fire window after center
+# 实际弹频由下位机/枪控决定，视觉端只在上述相位窗口内持续给出 fire_advice
 
 #####-----decider参数-----#####
 mode: 1
@@ -145,7 +147,7 @@ distort_coeffs: [-0.070281213351805649, 0.3722108258423531, -0.00030917352874843
 #####-----planner-----#####
 fire_thresh: 0.0035
 
-max_yaw_acc: 50
+max_yaw_acc: 50 
 Q_yaw: [9e6, 0]
 R_yaw: [1]
 
