@@ -465,46 +465,76 @@ void draw_omni_overlay(cv::Mat & img, const OmniInferenceResult & result)
 }
 
 void draw_auto_aim_overlay(
-  cv::Mat & img, const std::list<auto_aim::Target> & targets,
-  const auto_aim::Solver & solver, double timing_offset_ms)
+  cv::Mat & img, const std::list<auto_aim::Armor> & armors,
+  const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
+  const auto_aim::Solver & solver)
 {
-  // Timing calibration needs only one same-frame pair. Showing all of a robot's armor plates,
-  // the ballistic aim point, and PnP round trips makes a correct multi-plate model look wrong.
-  const cv::Scalar kDetectionColor{255, 255, 0};  // cyan
-  const cv::Scalar kPredictionColor{0, 255, 255}; // yellow
+  const cv::Scalar kDetectionColor{0, 255, 255};  // yellow
+  const cv::Scalar kOutpostDetectionColor{0, 255, 0};  // green
+  const cv::Scalar kTrackerColor{0, 255, 0};      // green
+  const cv::Scalar kOutpostTrackerColor{0, 0, 255};  // red
+  const cv::Scalar kAimColor{0, 0, 255};          // red
 
-  tools::draw_text(
-    img, fmt::format("timing offset={:+.2f}ms", timing_offset_ms), {10, 90},
-    {220, 220, 220}, 0.7, 2);
+  int detection_index = 0;
+  for (const auto & armor : armors) {
+    ++detection_index;
+    if (armor.points.empty()) continue;
+    const cv::Scalar color =
+      armor.name == auto_aim::ArmorName::outpost ? kOutpostDetectionColor : kDetectionColor;
+    tools::draw_points(img, armor.points, color, 3);
+    tools::draw_text(
+      img,
+      fmt::format(
+        "D{} {} {:.2f}", detection_index, auto_aim::ARMOR_NAMES[armor.name], armor.confidence),
+      armor.points.front() + cv::Point2f{0.0f, -8.0f}, color, 0.55, 2);
+  }
 
   if (targets.empty()) {
-    tools::draw_text(img, "timing pair: waiting for tracker", {10, 120}, {120, 120, 120}, 0.7, 2);
+    const bool detected_outpost = std::any_of(
+      armors.begin(), armors.end(), [](const auto_aim::Armor & armor) {
+        return armor.name == auto_aim::ArmorName::outpost;
+      });
+    tools::draw_text(
+      detected_outpost ? "green=detector  red=tracker | tracker: waiting"
+                       : "yellow=detector  green=tracker  red=aim | tracker: waiting",
+      {10, std::max(25, img.rows - 20)}, {220, 220, 220}, 0.6, 2);
     return;
   }
 
   const auto & target = targets.front();
-  if (!target.has_timing_debug_pair()) {
-    tools::draw_text(img, "timing pair: no current detection", {10, 120}, {120, 120, 120}, 0.7, 2);
-    return;
+  const bool is_outpost = target.name == auto_aim::ArmorName::outpost;
+  int tracker_armor_index = 0;
+  for (const auto & xyza : target.armor_xyza_list()) {
+    const auto image_points =
+      solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
+    ++tracker_armor_index;
+    if (image_points.empty()) continue;
+    const cv::Scalar color = is_outpost ? kOutpostTrackerColor : kTrackerColor;
+    tools::draw_points(img, image_points, color, 3);
+    tools::draw_text(
+      img, fmt::format("T{}", tracker_armor_index),
+      image_points.front() + cv::Point2f{0.0f, 18.0f}, color, 0.55, 2);
   }
 
-  const auto & detection_points = target.timing_debug_detection_points();
-  const auto predicted_xyza = target.timing_debug_prediction_xyza();
-  const auto predicted_points = solver.reproject_armor(
-    predicted_xyza.head(3), predicted_xyza[3], target.armor_type, target.name);
-  tools::draw_points(img, detection_points, kDetectionColor, 2);
-  tools::draw_points(img, predicted_points, kPredictionColor, 2);
-
-  const size_t point_count = std::min(detection_points.size(), predicted_points.size());
-  double squared_error_sum = 0.0;
-  for (size_t i = 0; i < point_count; ++i) {
-    const cv::Point2f delta = detection_points[i] - predicted_points[i];
-    squared_error_sum += delta.dot(delta);
+  if (!is_outpost && aimer.debug_aim_point.valid) {
+    const auto & aim_xyza = aimer.debug_aim_point.xyza;
+    const auto image_points =
+      solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
+    tools::draw_points(img, image_points, kAimColor, 3);
   }
-  const double rms_error_px = point_count == 0 ? 0.0 : std::sqrt(squared_error_sum / point_count);
+
+  const std::string tracker_status =
+    is_outpost ? (target.outpost_layer_locked() ? "locked" : "initializing") : "tracking";
+  const std::string legend =
+    is_outpost
+      ? fmt::format(
+          "green=detector({})  red=tracker({}) | {} {}", armors.size(), tracker_armor_index,
+          auto_aim::ARMOR_NAMES[target.name], tracker_status)
+      : fmt::format(
+          "yellow=detector({})  green=tracker({})  red=aim | {} {}", armors.size(),
+          tracker_armor_index, auto_aim::ARMOR_NAMES[target.name], tracker_status);
   tools::draw_text(
-    img, fmt::format("cyan=detector  yellow=pre-EKF  rms={:.1f}px", rms_error_px), {10, 120},
-    {220, 220, 220}, 0.7, 2);
+    img, legend, {10, std::max(25, img.rows - 20)}, {220, 220, 220}, 0.6, 2);
 }
 
 cv::Mat resize_for_view(const cv::Mat & img)
@@ -1426,7 +1456,7 @@ int main(int argc, char * argv[])
           buff_power_runes.has_value() ? 1 : 0, buff_target_solved ? 1 : 0),
         {10, 90}, {180, 255, 180}, 0.8, 2);
     } else {
-      draw_auto_aim_overlay(main_img, targets, solver, gimbal->offset_ms());
+      draw_auto_aim_overlay(main_img, armors, targets, aimer, solver);
     }
     const std::string mode_label = buff_mode ? buff_mode_name(gimbal_mode)
                                              : (omni_mode ? "OMNI" : "MPC");
