@@ -13,6 +13,7 @@
 #include <string>
 
 #include "tasks/auto_aim/aimer.hpp"
+#include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
