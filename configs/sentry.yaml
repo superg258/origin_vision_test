@@ -1,5 +1,5 @@
-# enemy_color: "red"
-enemy_color: "blue"
+enemy_color: "red"
+#enemy_color: "blue"
 
 
 #####-----神经网络参数-----#####
@@ -94,7 +94,7 @@ outpost_max_temp_lost_count: 75
 gimbal_axis_order: pitch_yaw # yaw_pitch: yaw轴在外；pitch_yaw: pitch轴在外
 
 #####-----aimer参数-----#####
-yaw_offset: 2.5 # degree -2.5
+yaw_offset: 2.3 # degree -2.5
 pitch_offset: -0.5  # degree 2
 
 comming_angle: 60 # degree
@@ -102,27 +102,25 @@ leaving_angle: 20 # degree
 resistance_k: 0.023 # 空气阻力系数
 decision_speed: 8 # rad/s
 high_speed_delay_time: 0.073 # s
-low_speed_delay_time: 0.077 # s
+low_speed_delay_time: 0.08 # s
 # Extra prediction time for the outpost only. Negative values reduce its aim lead.
 outpost_prediction_offset_s: -0.055
 
 #####-----shooter参数-----#####
-first_tolerance: 3 # 近距离射击容差，degree
-second_tolerance: 3 # 远距离射击容差，degree
+first_tolerance: 7 # 近距离射击容差，degree
+second_tolerance: 7 # 远距离射击容差，degree
 judge_distance: 3 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 high_spin_force_fire_enabled: true
-high_spin_force_fire_enter_speed: 6.0 # rad/s, keep tracking armor and continuously fire
-high_spin_force_fire_exit_speed: 5.0 # rad/s, hysteresis prevents repeated mode switching
+high_spin_force_fire_enter_speed: 8.0 # rad/s, keep tracking armor and continuously fire
+high_spin_force_fire_exit_speed: 6.0 # rad/s, hysteresis prevents repeated mode switching
 high_spin_center_aim_enabled: true
-high_spin_center_aim_enter_speed: 10.0 # rad/s, aim at vehicle rotation center and continuously fire
-high_spin_center_aim_exit_speed: 8.0 # rad/s
+high_spin_center_aim_enter_speed: 11.0 # rad/s, aim at vehicle rotation center and continuously fire
+high_spin_center_aim_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
-# Before the armor faces the shooter, wait for this many degrees; after it passes the center,
-# keep firing through outpost_fire_exit_angle. Negative enter values delay fire until after center.
-# The directions follow the tracked rotation sign.
-outpost_fire_enter_angle: 10.0 # degree, starts firing 5 degrees after facing the shooter
-outpost_fire_exit_angle: 40.0 # degree, larger means longer firing while leaving
+
+outpost_fire_enter_angle: 45 .0 # degree, starts firing 5 degrees after facing the shooter
+outpost_fire_exit_angle: 70.0 # degree, larger means longer firing while leaving
 
 #####-----decider参数-----#####
 mode: 1
@@ -148,7 +146,7 @@ camera_matrix: [2433.3288076236572, 0, 646.39331609299018, 0, 2431.9633549421087
 distort_coeffs: [-0.050822363718653403, 0.25923790410118597, -0.0029062438788101989, -0.0071350967596258289, 0]
 
 #####-----planner-----#####
-fire_thresh: 0.0035
+fire_thresh: 0.035
 mpc_takeover_time_s: 0.20 # 首次稳定锁定后，从实测关节角平滑接管到MPC轨迹
 mpc_gimbal_status_timeout_s: 0.20 # 状态超过该时间未更新则立即关闭MPC控制
 # 所有目标共用同一物理pitch软件限位；内部负值为抬头。
