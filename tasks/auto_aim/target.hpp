@@ -30,7 +30,8 @@ public:
   Target(
     const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
     Eigen::VectorXd P0_dig, bool outpost_static_direct_enabled = false,
-    double outpost_static_speed_threshold = 0.15);
+    double outpost_static_speed_threshold = 0.15,
+    int outpost_static_motion_confirm_frames = 3);
   Target(double x, double vyaw, double radius, double h);
 
   void predict(std::chrono::steady_clock::time_point t);

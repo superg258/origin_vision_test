@@ -71,11 +71,15 @@ private:
 
   bool outpost_layer_correction_enabled_;
   int outpost_layer_correction_frames_;
+  int outpost_layer_switch_frames_;
   double outpost_layer_correction_z_gate_;
   bool outpost_static_direct_enabled_;
   double outpost_static_speed_threshold_;
+  int outpost_static_motion_confirm_frames_;
   int outpost_layer_correction_candidate_ = -1;
   int outpost_layer_correction_count_ = 0;
+  int outpost_layer_switch_candidate_ = -1;
+  int outpost_layer_switch_count_ = 0;
 
   void apply_priority(std::list<Armor> & armors) const;
 

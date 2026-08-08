@@ -24,7 +24,7 @@ double armor_angle_offset(int id, int armor_num)
 Target::Target(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
   Eigen::VectorXd P0_dig, bool outpost_static_direct_enabled,
-  double outpost_static_speed_threshold)
+  double outpost_static_speed_threshold, int outpost_static_motion_confirm_frames)
 : name(armor.name),
   armor_type(armor.type),
   priority(armor.priority),
@@ -35,7 +35,8 @@ Target::Target(
 {
   if (name == ArmorName::outpost && armor_num == 3) {
     outpost_target_.emplace(
-      armor, t, radius, P0_dig, outpost_static_direct_enabled, outpost_static_speed_threshold);
+      armor, t, radius, P0_dig, outpost_static_direct_enabled, outpost_static_speed_threshold,
+      outpost_static_motion_confirm_frames);
     last_id = outpost_target_->last_id();
     return;
   }

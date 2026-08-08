@@ -81,10 +81,12 @@ LineFitResult fit_line(const std::vector<double> & times, const std::vector<doub
 
 OutpostTarget::OutpostTarget(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius,
-  const Eigen::VectorXd & P0_dig, bool static_direct_enabled, double static_speed_threshold)
+  const Eigen::VectorXd & P0_dig, bool static_direct_enabled, double static_speed_threshold,
+  int static_motion_confirm_frames)
 : t_(t),
   static_direct_enabled_(static_direct_enabled),
-  static_speed_threshold_(std::max(0.0, static_speed_threshold))
+  static_speed_threshold_(std::max(0.0, static_speed_threshold)),
+  static_motion_confirm_frames_(std::max(1, static_motion_confirm_frames))
 {
   const auto & xyz = armor.xyz_in_world;
   const auto & ypr = armor.ypr_in_world;
@@ -477,9 +479,25 @@ void OutpostTarget::update_static_direct_state(const Armor & armor)
   const double yaw_rate = std::abs(tools::limit_rad(
     static_motion_observations_.back().yaw - static_motion_observations_.front().yaw)) / dt;
   const bool should_use_direct = yaw_rate <= static_speed_threshold_;
-  if (should_use_direct == static_direct_active_) return;
+  const int desired_mode = should_use_direct ? 1 : 0;
+  const int current_mode = static_direct_active_ ? 1 : 0;
+  if (desired_mode == current_mode) {
+    static_mode_candidate_ = -1;
+    static_mode_count_ = 0;
+    return;
+  }
+
+  if (static_mode_candidate_ == desired_mode) {
+    static_mode_count_++;
+  } else {
+    static_mode_candidate_ = desired_mode;
+    static_mode_count_ = 1;
+  }
+  if (static_mode_count_ < static_motion_confirm_frames_) return;
 
   static_direct_active_ = should_use_direct;
+  static_mode_candidate_ = -1;
+  static_mode_count_ = 0;
   layer_locked_ = false;
   preview_ready_ = false;
   init_observations_.clear();

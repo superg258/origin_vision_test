@@ -392,12 +392,43 @@ int main()
     armors.push_back(make_detection_outpost_armor(config_path, predicted[0].head(3), predicted[0][3]));
     armors.push_back(make_detection_outpost_armor(config_path, predicted[2].head(3), predicted[2][3]));
 
-    const bool found = tracker.update_target(armors, now + std::chrono::milliseconds(10));
-    if (!expect(found, "outpost tracker should find a candidate from multiple detections")) return 1;
+    const bool first_found = tracker.update_target(armors, now + std::chrono::milliseconds(10));
+    if (!expect(!first_found, "outpost tracker should defer a one-frame layer switch")) return 1;
+    const bool second_found = tracker.update_target(armors, now + std::chrono::milliseconds(20));
+    if (!expect(!second_found, "outpost tracker should defer a two-frame layer switch")) return 1;
+    const bool found = tracker.update_target(armors, now + std::chrono::milliseconds(30));
+    if (!expect(found, "outpost tracker should accept a persistent layer switch")) return 1;
     if (!expect(
           tracker.target_.last_id == 0,
           "outpost tracker candidate selection should not be biased to previous last_id, actual=" +
             std::to_string(tracker.target_.last_id))) {
+      return 1;
+    }
+  }
+
+  {
+    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
+    const Eigen::Vector3d center_base(2.20, 0.10, 0.70);
+    const auto static_armor = make_outpost_layer_armor(center_base, 0.40, 0);
+    auto_aim::Target target(static_armor, now, 0.2765, 3, P0_dig, true, 0.15, 3);
+
+    for (int i = 1; i <= 3; ++i) {
+      const auto t = now + std::chrono::milliseconds(100 * i);
+      target.predict(t);
+      target.update(static_armor);
+    }
+    if (!expect(
+          target.outpost_static_direct_active(),
+          "static outpost should enter direct mode after confirmation frames")) {
+      return 1;
+    }
+
+    const auto noisy_armor = make_outpost_layer_armor(center_base, 0.60, 0);
+    target.predict(now + std::chrono::milliseconds(400));
+    target.update(noisy_armor);
+    if (!expect(
+          target.outpost_static_direct_active(),
+          "one noisy static yaw measurement should not leave direct mode")) {
       return 1;
     }
   }

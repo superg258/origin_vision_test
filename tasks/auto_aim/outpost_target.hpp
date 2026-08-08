@@ -30,7 +30,7 @@ public:
   OutpostTarget(
     const Armor & armor, std::chrono::steady_clock::time_point t, double radius,
     const Eigen::VectorXd & P0_dig, bool static_direct_enabled = false,
-    double static_speed_threshold = 0.15);
+    double static_speed_threshold = 0.15, int static_motion_confirm_frames = 3);
 
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
@@ -89,7 +89,10 @@ private:
   bool layer_locked_ = false;
   bool static_direct_enabled_ = false;
   double static_speed_threshold_ = 0.15;
+  int static_motion_confirm_frames_ = 3;
   bool static_direct_active_ = false;
+  int static_mode_candidate_ = -1;
+  int static_mode_count_ = 0;
   std::deque<Observation> static_motion_observations_;
   std::deque<Observation> init_observations_;
   bool preview_ready_ = false;

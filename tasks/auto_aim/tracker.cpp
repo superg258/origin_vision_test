@@ -106,12 +106,16 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
     yaml["outpost_layer_correction_enabled"].as<bool>(true);
   outpost_layer_correction_frames_ =
     std::max(1, yaml["outpost_layer_correction_frames"].as<int>(3));
+  outpost_layer_switch_frames_ =
+    std::max(1, yaml["outpost_layer_switch_frames"].as<int>(3));
   outpost_layer_correction_z_gate_ =
     std::max(0.0, yaml["outpost_layer_correction_z_gate"].as<double>(0.06));
   outpost_static_direct_enabled_ =
     yaml["outpost_static_direct_aim_enabled"].as<bool>(true);
   outpost_static_speed_threshold_ =
     std::max(0.0, yaml["outpost_static_speed_threshold"].as<double>(0.15));
+  outpost_static_motion_confirm_frames_ =
+    std::max(1, yaml["outpost_static_motion_confirm_frames"].as<int>(3));
 
   YAML::Node priority_yaml;
   bool has_priority_yaml = false;
@@ -149,6 +153,8 @@ void Tracker::reset_outpost_layer_correction()
 {
   outpost_layer_correction_candidate_ = -1;
   outpost_layer_correction_count_ = 0;
+  outpost_layer_switch_candidate_ = -1;
+  outpost_layer_switch_count_ = 0;
 }
 
 Tracker::OutpostLayerCorrectionDecision Tracker::decide_outpost_layer_correction(
@@ -462,7 +468,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
     target_ = Target(
       armor, t, 0.2765, 3, P0_dig, outpost_static_direct_enabled_,
-      outpost_static_speed_threshold_);
+      outpost_static_speed_threshold_, outpost_static_motion_confirm_frames_);
   } else if (armor.name == ArmorName::base) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
     target_ = Target(armor, t, 0.3205, 3, P0_dig);
@@ -581,6 +587,26 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
   const auto correction =
     decide_outpost_layer_correction(*best_armor, best_id, predicted_armors);
   if (correction.defer_update) return false;
+
+  // A valid layer change must persist for several frames. This covers switches that
+  // pass the height-correction branch but are still caused by a single noisy PnP result.
+  if (target_.outpost_layer_locked() && correction.layer_id != target_.last_id &&
+      !correction.corrected) {
+    if (outpost_layer_switch_candidate_ == correction.layer_id) {
+      outpost_layer_switch_count_++;
+    } else {
+      outpost_layer_switch_candidate_ = correction.layer_id;
+      outpost_layer_switch_count_ = 1;
+    }
+    if (outpost_layer_switch_count_ < outpost_layer_switch_frames_) {
+      target_.set_outpost_layer_correction_debug(
+        best_id, correction.layer_id, 0.0, 0.0, 0.0, outpost_layer_switch_count_, true, false);
+      return false;
+    }
+  }
+
+  outpost_layer_switch_candidate_ = -1;
+  outpost_layer_switch_count_ = 0;
 
   target_.update(*best_armor, correction.layer_id);
   return true;
