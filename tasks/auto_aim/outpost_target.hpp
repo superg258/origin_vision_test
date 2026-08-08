@@ -29,7 +29,8 @@ public:
   OutpostTarget() = default;
   OutpostTarget(
     const Armor & armor, std::chrono::steady_clock::time_point t, double radius,
-    const Eigen::VectorXd & P0_dig);
+    const Eigen::VectorXd & P0_dig, bool static_direct_enabled = false,
+    double static_speed_threshold = 0.15);
 
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
@@ -44,6 +45,7 @@ public:
   double last_observed_age() const;
   bool layer_locked() const;
   bool unlocked_prediction_ready() const;
+  bool static_direct_active() const;
 
   void set_association_debug(
     int best_id, const std::array<double, 3> & scores, double best_score,
@@ -85,6 +87,10 @@ private:
   double last_observed_age_s_ = std::numeric_limits<double>::infinity();
 
   bool layer_locked_ = false;
+  bool static_direct_enabled_ = false;
+  double static_speed_threshold_ = 0.15;
+  bool static_direct_active_ = false;
+  std::deque<Observation> static_motion_observations_;
   std::deque<Observation> init_observations_;
   bool preview_ready_ = false;
   int preview_layer_ = -1;
@@ -101,6 +107,7 @@ private:
   Eigen::Vector3d center_from_armor(const Armor & armor) const;
   Eigen::Vector4d predicted_unlocked_xyza() const;
   void observe_unlocked(const Armor & armor);
+  void update_static_direct_state(const Armor & armor);
   bool try_lock_layers();
 
   Eigen::Vector3d armor_xyz(const Eigen::VectorXd & x, int id) const;

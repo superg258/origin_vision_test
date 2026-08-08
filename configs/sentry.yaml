@@ -115,6 +115,7 @@ outpost_fire_require_locked: true
 outpost_phase_fire_enabled: true # 是否启用前哨站按相位窗口控制开火
 outpost_static_fire_enabled: true # 是否启用前哨站静止开火模式
 outpost_static_fire_require_locked: false # 静止模式是否仍要求三层锁定
+outpost_static_direct_aim_enabled: true # 静止前哨直接瞄当前看到的装甲，不做三层关联
 outpost_static_speed_threshold: 0.15 # 小于该角速度(rad/s)视为静止
 outpost_fire_coming_angle: 30.0 # degree, coming-side fire window before center
 outpost_fire_leaving_angle: 45.0 # degree, leaving-side fire window after center

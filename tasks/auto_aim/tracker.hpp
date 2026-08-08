@@ -72,6 +72,8 @@ private:
   bool outpost_layer_correction_enabled_;
   int outpost_layer_correction_frames_;
   double outpost_layer_correction_z_gate_;
+  bool outpost_static_direct_enabled_;
+  double outpost_static_speed_threshold_;
   int outpost_layer_correction_candidate_ = -1;
   int outpost_layer_correction_count_ = 0;
 

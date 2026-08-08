@@ -29,7 +29,8 @@ public:
   Target() = default;
   Target(
     const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
-    Eigen::VectorXd P0_dig);
+    Eigen::VectorXd P0_dig, bool outpost_static_direct_enabled = false,
+    double outpost_static_speed_threshold = 0.15);
   Target(double x, double vyaw, double radius, double h);
 
   void predict(std::chrono::steady_clock::time_point t);
@@ -43,6 +44,7 @@ public:
   Eigen::Vector4d last_observed_armor_xyza() const;
   double last_observed_age() const;
   bool outpost_layer_locked() const;
+  bool outpost_static_direct_active() const;
   bool outpost_unlocked_prediction_ready() const;
   void set_outpost_association_debug(
     int best_id, const std::array<double, 3> & scores, double best_score,

@@ -81,8 +81,10 @@ LineFitResult fit_line(const std::vector<double> & times, const std::vector<doub
 
 OutpostTarget::OutpostTarget(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius,
-  const Eigen::VectorXd & P0_dig)
-: t_(t)
+  const Eigen::VectorXd & P0_dig, bool static_direct_enabled, double static_speed_threshold)
+: t_(t),
+  static_direct_enabled_(static_direct_enabled),
+  static_speed_threshold_(std::max(0.0, static_speed_threshold))
 {
   const auto & xyz = armor.xyz_in_world;
   const auto & ypr = armor.ypr_in_world;
@@ -102,7 +104,9 @@ OutpostTarget::OutpostTarget(
   layer_locked_ = false;
   last_id_ = -1;
   record_observed_armor(armor);
-  init_observations_.push_back(Observation{t, xyz, center_from_armor(armor), ypr[0]});
+  const Observation initial_observation{t, xyz, center_from_armor(armor), ypr[0]};
+  static_motion_observations_.push_back(initial_observation);
+  init_observations_.push_back(initial_observation);
   ekf_.data["outpost_layer_locked"] = 0.0;
   ekf_.data["init_best_score"] = std::numeric_limits<double>::infinity();
   ekf_.data["init_margin"] = 0.0;
@@ -170,6 +174,22 @@ void OutpostTarget::predict(double dt)
 
 void OutpostTarget::update(const Armor & armor, std::optional<int> forced_id)
 {
+  update_static_direct_state(armor);
+  if (static_direct_active_) {
+    layer_locked_ = false;
+    preview_ready_ = false;
+    init_observations_.clear();
+    last_id_ = -1;
+    jumped_ = false;
+    switched_ = false;
+    ekf_.x[7] = 0.0;
+    ekf_.data["outpost_layer_locked"] = 0.0;
+    ekf_.data["outpost_selected_id"] = -1.0;
+    record_observed_armor(armor);
+    update_count_++;
+    return;
+  }
+
   if (!layer_locked_) {
     observe_unlocked(armor);
     update_count_++;
@@ -283,6 +303,7 @@ bool OutpostTarget::has_last_observed_armor() const { return has_last_observed_a
 Eigen::Vector4d OutpostTarget::last_observed_armor_xyza() const { return last_observed_armor_xyza_; }
 double OutpostTarget::last_observed_age() const { return last_observed_age_s_; }
 bool OutpostTarget::layer_locked() const { return layer_locked_; }
+bool OutpostTarget::static_direct_active() const { return static_direct_active_; }
 bool OutpostTarget::unlocked_prediction_ready() const
 {
   return !layer_locked_ && preview_ready_ && last_observed_age_s_ <= PREVIEW_MAX_AGE;
@@ -431,6 +452,42 @@ void OutpostTarget::observe_unlocked(const Armor & armor)
     ekf_.data["outpost_layer_residual"] = 0.0;
     ekf_.data["outpost_phase_residual"] = 0.0;
     ekf_.data["outpost_center_speed"] = 0.0;
+  }
+}
+
+void OutpostTarget::update_static_direct_state(const Armor & armor)
+{
+  if (!static_direct_enabled_) return;
+
+  static_motion_observations_.push_back(
+    Observation{t_, armor.xyz_in_world, center_from_armor(armor), armor.ypr_in_world[0]});
+  while (
+    static_motion_observations_.size() > 2 &&
+    tools::delta_time(
+      static_motion_observations_.back().t, static_motion_observations_.front().t) > 0.16)
+  {
+    static_motion_observations_.pop_front();
+  }
+
+  if (static_motion_observations_.size() < 2) return;
+  const double dt = tools::delta_time(
+    static_motion_observations_.back().t, static_motion_observations_.front().t);
+  if (dt < 0.10) return;
+
+  const double yaw_rate = std::abs(tools::limit_rad(
+    static_motion_observations_.back().yaw - static_motion_observations_.front().yaw)) / dt;
+  const bool should_use_direct = yaw_rate <= static_speed_threshold_;
+  if (should_use_direct == static_direct_active_) return;
+
+  static_direct_active_ = should_use_direct;
+  layer_locked_ = false;
+  preview_ready_ = false;
+  init_observations_.clear();
+  last_id_ = -1;
+  jumped_ = false;
+  if (static_direct_active_) {
+    ekf_.x[7] = 0.0;
+    ekf_.data["outpost_layer_locked"] = 0.0;
   }
 }
 

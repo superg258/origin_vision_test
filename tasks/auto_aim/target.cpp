@@ -23,7 +23,8 @@ double armor_angle_offset(int id, int armor_num)
 
 Target::Target(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
-  Eigen::VectorXd P0_dig)
+  Eigen::VectorXd P0_dig, bool outpost_static_direct_enabled,
+  double outpost_static_speed_threshold)
 : name(armor.name),
   armor_type(armor.type),
   priority(armor.priority),
@@ -33,7 +34,8 @@ Target::Target(
   t_(t)
 {
   if (name == ArmorName::outpost && armor_num == 3) {
-    outpost_target_.emplace(armor, t, radius, P0_dig);
+    outpost_target_.emplace(
+      armor, t, radius, P0_dig, outpost_static_direct_enabled, outpost_static_speed_threshold);
     last_id = outpost_target_->last_id();
     return;
   }
@@ -270,6 +272,11 @@ double Target::last_observed_age() const
 bool Target::outpost_layer_locked() const
 {
   return !outpost_target_.has_value() || outpost_target_->layer_locked();
+}
+
+bool Target::outpost_static_direct_active() const
+{
+  return outpost_target_.has_value() && outpost_target_->static_direct_active();
 }
 
 bool Target::outpost_unlocked_prediction_ready() const

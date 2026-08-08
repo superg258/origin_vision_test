@@ -1,4 +1,4 @@
-#include "tracker.hpp"
+  #include "tracker.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -108,6 +108,10 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
     std::max(1, yaml["outpost_layer_correction_frames"].as<int>(3));
   outpost_layer_correction_z_gate_ =
     std::max(0.0, yaml["outpost_layer_correction_z_gate"].as<double>(0.06));
+  outpost_static_direct_enabled_ =
+    yaml["outpost_static_direct_aim_enabled"].as<bool>(true);
+  outpost_static_speed_threshold_ =
+    std::max(0.0, yaml["outpost_static_speed_threshold"].as<double>(0.15));
 
   YAML::Node priority_yaml;
   bool has_priority_yaml = false;
@@ -456,7 +460,9 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 
   if (armor.name == ArmorName::outpost) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 25, 81, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.2765, 3, P0_dig);
+    target_ = Target(
+      armor, t, 0.2765, 3, P0_dig, outpost_static_direct_enabled_,
+      outpost_static_speed_threshold_);
   } else if (armor.name == ArmorName::base) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
     target_ = Target(armor, t, 0.3205, 3, P0_dig);
@@ -493,6 +499,14 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     reset_outpost_layer_correction();
     target_.set_outpost_layer_correction_debug(-1, -1, 0.0, 0.0, 0.0, 0, false, false);
     return false;
+  }
+
+  if (target_.outpost_static_direct_active()) {
+    auto & armor = *candidates.front();
+    solver_.solve(armor);
+    target_.update(armor);
+    reset_outpost_layer_correction();
+    return true;
   }
 
   const std::vector<Eigen::Vector4d> predicted_armors = target_.armor_xyza_list();

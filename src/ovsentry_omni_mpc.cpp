@@ -1001,7 +1001,9 @@ int main(int argc, char * argv[])
       const bool outpost_convergence = 
       !targets.empty() && targets.front().name == auto_aim::ArmorName::outpost &&
       (!targets.front().convergened() || targets.front().diverged());
-      if (!armor_acquiring && outpost_convergence) {
+      const bool static_outpost_direct =
+        !targets.empty() && targets.front().outpost_static_direct_active();
+      if (!armor_acquiring && outpost_convergence && !static_outpost_direct) {
         command = io::Command{false, false, 0.0, 0.0};
       }
       

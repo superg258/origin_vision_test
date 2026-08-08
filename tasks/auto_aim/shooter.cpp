@@ -67,7 +67,8 @@ bool Shooter::shoot(
   if (target.name == ArmorName::outpost) {
     const bool locked = target.outpost_layer_locked();
     const bool static_mode =
-      outpost_static_fire_enabled_ && angular_speed <= outpost_static_speed_threshold_;
+      outpost_static_fire_enabled_ &&
+      (target.outpost_static_direct_active() || angular_speed <= outpost_static_speed_threshold_);
     const bool require_locked =
       static_mode ? outpost_static_fire_require_locked_ : outpost_fire_require_locked_;
     if ((require_locked && !locked) || !aim_locked) {
